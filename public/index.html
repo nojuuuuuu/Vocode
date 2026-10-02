@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111720">
+  <title>Vocode — 声でつくる開発環境</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <svg class="icons" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 5-6 7 6 7M16 5l6 7-6 7M14 3l-4 18"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="13" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v4m-4 0h8"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M5 2h9l5 5v15H5zM14 2v5h5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 4v16M4 12h16"/></symbol>
+    <symbol id="i-save" viewBox="0 0 24 24"><path d="M4 3h14l3 3v15H3V3zM7 3v7h10V3M7 21v-8h10v8"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8z"/></symbol>
+    <symbol id="i-send" viewBox="0 0 24 24"><path d="M3 11.5 21 3l-6.5 18-3-8-8.5-1.5ZM11.5 13 21 3"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="m12 2 2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><path d="M3 9v6h4l5 4V5L7 9zM16 9a5 5 0 0 1 0 6M19 6a9 9 0 0 1 0 12"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2 6M20 4v7h-7"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M2 6h7l2 3h11v11H2z"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2m3 0-1 15H6L5 6m5 4v7m4-7v7"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="M5 5 19 19M19 5 5 19"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 17v4h16v-4"/></symbol>
+  </svg>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark"><svg><use href="#i-code"/></svg></span><span>vocode<span class="brand-dot">.</span></span><span class="brand-label">VOICE CODING SPACE</span></div>
+      <button id="chooseWorkspaceButton" class="top-center workspace-picker" type="button" title="作業フォルダを選ぶ"><span class="project-icon">◇</span> <span id="projectName">workspace</span><span class="chevron">⌄</span></button>
+      <div class="top-actions"><button id="saveLocalButton" class="export-button" title="プロジェクトをローカルに保存"><svg><use href="#i-download"/></svg>ローカルに保存</button><span id="apiStatus" class="api-status"><span class="status-dot"></span> 接続確認中</span><button id="helpButton" class="top-help" title="使い方">?</button></div>
+    </header>
+    <div class="workspace-layout">
+      <aside class="sidebar">
+        <div class="sidebar-heading"><span>EXPLORER</span><div class="sidebar-actions"><button id="newFileButton" class="icon-button" title="新しいファイル" aria-label="新しいファイル"><svg><use href="#i-file"/></svg></button><button id="newFolderButton" class="icon-button" title="新しいフォルダ" aria-label="新しいフォルダ"><svg><use href="#i-folder"/></svg></button><button id="refreshTreeButton" class="icon-button" title="ファイル一覧を更新" aria-label="ファイル一覧を更新"><svg><use href="#i-refresh"/></svg></button></div></div>
+        <div id="projectHeading" class="project-heading" title="ここに移動できます"><span class="project-caret">⌄</span><span class="project-folder">▱</span> <span id="projectFolderName">workspace</span></div>
+        <div id="projectPath" class="project-path" title="現在の保存先"></div>
+        <div class="file-search-wrap"><input id="fileSearch" type="search" placeholder="ファイルを検索" aria-label="ファイルを検索"></div>
+        <nav id="fileList" class="file-list" aria-label="ファイル一覧"></nav>
+        <div class="trash-panel"><button id="trashToggle" class="trash-heading"><svg><use href="#i-trash"/></svg><span>ゴミ箱</span><span id="trashCount" class="trash-count">0</span></button><div id="trashList" class="trash-list" hidden></div></div>
+        <div class="sidebar-bottom"><span class="sidebar-bottom-icon">⌘</span><span>作ることに、集中しよう。</span></div>
+      </aside>
+
+      <main class="main-panel">
+        <div class="editor-topline"><div id="tabs" class="tabs"></div><div class="editor-top-actions"><button id="saveButton" class="subtle-button"><svg><use href="#i-save"/></svg>保存</button><button id="previewButton" class="subtle-button"><svg><use href="#i-play"/></svg>プレビュー</button></div></div>
+        <div id="editorView" class="editor-view">
+          <div class="breadcrumb"><span class="crumb-folder">workspace</span><span class="slash">/</span><span id="breadcrumbFile">index.html</span><span id="dirtyLabel" class="dirty-label" hidden>未保存</span></div>
+          <div class="editor-area"><div id="codeEditor" class="code-editor"></div></div>
+          <div class="editor-status"><div><span class="status-live"></span><span id="saveStatus">準備中</span></div><div><span id="cursorPosition">行 1, 列 1</span><span id="languageLabel">HTML</span><span>UTF-8</span></div></div>
+        </div>
+        <div id="previewView" class="preview-view" hidden><div class="preview-toolbar"><span>ライブプレビュー</span><button id="refreshPreviewButton" class="icon-button" title="更新"><svg><use href="#i-refresh"/></svg></button></div><iframe id="previewFrame" title="プロジェクトのプレビュー" sandbox="allow-scripts"></iframe></div>
+      </main>
+
+      <aside class="assistant-panel">
+        <div class="assistant-header"><div><span class="assistant-eyebrow">YOUR CODING PARTNER</span><h1>声で、つくる。<span class="sparkle">✦</span></h1><p>手を止めずに聞いて、頼んで、進めよう。</p></div><div class="assistant-avatar"><svg><use href="#i-spark"/></svg></div></div>
+        <div class="mode-switch" role="tablist" aria-label="アシスタントのモード"><button id="askMode" class="mode active" role="tab" aria-selected="true">質問する</button><button id="buildMode" class="mode" role="tab" aria-selected="false">実装を頼む</button></div>
+        <div id="conversation" class="conversation" aria-live="polite"><div class="welcome"><div class="welcome-symbol"><svg><use href="#i-spark"/></svg></div><strong>何から始めますか？</strong><p>コードのことを聞いたり、やりたいことを声で伝えたり。ここから一緒に進めましょう。</p><div class="suggestions"><button data-suggestion="このコードの構成を説明して">このコードを説明して <span>↗</span></button><button data-suggestion="このページにダークモードを実装して">ダークモードを追加して <span>↗</span></button></div></div></div>
+        <div class="composer-area"><div id="recordingBanner" class="recording-banner" hidden><span class="record-pulse"></span>録音中です。もう一度押すと送信します。<span id="recordingTime">0:00</span></div><div class="composer"><textarea id="messageInput" rows="2" placeholder="質問や実装したいことを入力…" aria-label="メッセージ"></textarea><div class="composer-bottom"><div class="voice-controls"><button id="micButton" class="mic-button" title="音声で話す"><svg><use href="#i-mic"/></svg></button><span id="micHint">声で話す</span><button id="speakButton" class="sound-button active" title="回答を読み上げる"><svg><use href="#i-volume"/></svg></button></div><button id="sendButton" class="send-button" title="送信"><svg><use href="#i-send"/></svg></button></div></div><div class="composer-hint">Enterで送信 · Shift + Enterで改行</div></div>
+      </aside>
+    </div>
+  </div>
+  <dialog id="entryDialog" class="modal"><form id="entryForm"><h2 id="entryDialogTitle">新しいファイル</h2><p id="entryDialogHint">名前を入力してください。</p><button id="chooseEntryLocationButton" class="location-button" type="button">保存先フォルダを選ぶ…</button><input id="entryName" placeholder="名前" autocomplete="off" aria-describedby="entryError"><p id="entryError" class="field-error" role="alert" hidden>名前を入力してください。</p><div class="modal-actions"><button id="cancelEntryButton" type="button" class="secondary">キャンセル</button><button type="submit" class="primary">保存する</button></div></form></dialog>
+  <dialog id="workspaceDialog" class="modal"><form id="workspaceForm"><h2>作業フォルダを選ぶ</h2><p>ここで選んだフォルダに、これから作るファイルと編集内容を保存します。以前のフォルダのファイルは移動しません。</p><button id="browseWorkspaceButton" class="folder-browse-button" type="button"><svg><use href="#i-folder"/></svg>macOS の選択画面で選ぶ</button><p class="path-label"><label for="workspacePathInput">またはフォルダの絶対パスを入力</label></p><input id="workspacePathInput" autocomplete="off" spellcheck="false" placeholder="/Users/you/Documents/my-project"><p id="workspacePathError" class="field-error" role="alert" hidden>フォルダの絶対パスを入力してください。</p><div class="modal-actions"><button id="cancelWorkspaceButton" type="button" class="secondary">キャンセル</button><button id="openWorkspaceButton" type="submit" class="primary">このフォルダを開く</button></div></form></dialog>
+  <dialog id="moveDialog" class="modal"><form method="dialog"><h2>移動する</h2><p id="moveHint">移動先のフォルダを選んでください。</p><select id="moveDestination"></select><div class="modal-actions"><button id="cancelMoveButton" type="button" class="secondary">キャンセル</button><button type="submit" value="submit" class="primary">移動する</button></div></form></dialog>
+  <dialog id="saveLocalDialog" class="modal"><h2>ローカルに保存</h2><p>編集中の内容は、上部に表示された作業フォルダへ自動保存されます。別の場所へコピーする場合は方法を選んでください。</p><div class="save-options"><button id="saveFolderButton" type="button"><svg><use href="#i-folder"/></svg><span><strong>フォルダへコピー</strong><small>別の保存先へファイルを書き込みます。Chrome / Edge 対応。</small></span></button><button id="downloadZipButton" type="button"><svg><use href="#i-download"/></svg><span><strong>ZIP をダウンロード</strong><small>プロジェクト全体を1つのファイルにまとめます。</small></span></button></div><div class="modal-actions"><button id="closeSaveLocalButton" type="button" class="secondary">閉じる</button></div></dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <div id="entryMenu" class="entry-menu" hidden></div>
+  <dialog id="helpDialog" class="modal"><h2>Vocode の使い方</h2><p>上部のフォルダ名から作業フォルダを選べます。新しいファイルやフォルダはその中へ作成され、編集内容も自動保存されます。左側では項目の右クリックから名前変更、移動、ゴミ箱への移動ができます。</p><p>中央でコードを編集できます。右上の「ローカルに保存」から別のフォルダへのコピーやZIPダウンロードもできます。</p><p>右では質問と実装依頼を切り替えられます。AI の利用にはサーバー側の <code>OPENAI_API_KEY</code> が必要です。</p><div class="modal-actions"><button id="closeHelpButton" type="button" class="primary">閉じる</button></div></dialog>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
