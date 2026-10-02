@@ -12,6 +12,7 @@ const editor = createCodeEditor($('#codeEditor'), content => {
 }, () => updateEditorChrome());
 const messageInput = $('#messageInput');
 const welcomeTemplate = $('.welcome').cloneNode(true);
+let settingsStatus = { configured: false, model: '', keySource: 'none' };
 
 async function api(url, options = {}) {
   const response = await fetch(url, options);
@@ -520,6 +521,102 @@ function addMessage(role, content, isError = false) {
 
 function showError(message) { addMessage('assistant', message, true); }
 
+function updateApiStatus(status) {
+  settingsStatus = status;
+  $('#apiStatus').classList.toggle('ready', status.configured);
+  $('#apiStatus').lastChild.textContent = status.configured ? ` AI 設定済み · ${status.model}` : ' AI キー未設定';
+  $('#apiKeyHint').textContent = status.keySource === 'saved'
+    ? 'この端末に保存済みです。変更するときだけ新しいキーを入力してください。'
+    : status.keySource === 'environment'
+      ? '環境変数のキーを使用中です。ここに入力すると、この端末の設定が優先されます。'
+      : 'まだキーが設定されていません。';
+  $('#removeApiKeyButton').disabled = status.keySource !== 'saved';
+}
+
+function settingsMessage(message, error = false) {
+  const target = $('#settingsMessage');
+  target.textContent = message;
+  target.classList.toggle('error', error);
+  target.hidden = !message;
+}
+
+function settingsBusy(busy) {
+  for (const selector of ['#apiKeyInput', '#modelInput', '#loadModelsButton', '#testConnectionButton', '#saveSettingsButton', '#removeApiKeyButton']) {
+    $(selector).disabled = busy;
+  }
+  if (!busy) $('#removeApiKeyButton').disabled = settingsStatus.keySource !== 'saved';
+}
+
+async function openSettingsDialog() {
+  $('#apiKeyInput').value = '';
+  $('#apiKeyInput').type = 'password';
+  $('#toggleApiKeyButton').textContent = '表示';
+  $('#modelInput').value = settingsStatus.model;
+  settingsMessage('');
+  $('#settingsDialog').showModal();
+  try {
+    const status = await api('/api/settings');
+    updateApiStatus(status);
+    $('#modelInput').value = status.model;
+  } catch (error) { settingsMessage(error.message, true); }
+}
+
+async function loadModels() {
+  settingsBusy(true);
+  settingsMessage('モデル一覧を取得しています…');
+  try {
+    const { models } = await api('/api/models', jsonOptions('POST', { apiKey: $('#apiKeyInput').value.trim() }));
+    const options = $('#modelOptions');
+    options.replaceChildren();
+    for (const model of models) {
+      const option = document.createElement('option');
+      option.value = model;
+      options.append(option);
+    }
+    settingsMessage(`${models.length} 件のモデルを取得しました。入力欄から選べます。`);
+  } catch (error) { settingsMessage(error.message, true); }
+  finally { settingsBusy(false); }
+}
+
+async function checkSettingsConnection() {
+  settingsBusy(true);
+  settingsMessage('接続を確認しています…');
+  try {
+    const model = $('#modelInput').value.trim();
+    await api('/api/settings/check', jsonOptions('POST', { apiKey: $('#apiKeyInput').value.trim(), model }));
+    settingsMessage(`APIキーと ${model} の参照を確認できました。`);
+  } catch (error) { settingsMessage(error.message, true); }
+  finally { settingsBusy(false); }
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  settingsBusy(true);
+  settingsMessage('保存しています…');
+  try {
+    const status = await api('/api/settings', jsonOptions('PUT', {
+      apiKey: $('#apiKeyInput').value.trim(), model: $('#modelInput').value.trim()
+    }));
+    $('#apiKeyInput').value = '';
+    updateApiStatus(status);
+    $('#settingsDialog').close();
+    showToast('AI 設定を保存しました。');
+  } catch (error) { settingsMessage(error.message, true); }
+  finally { settingsBusy(false); }
+}
+
+async function removeSavedApiKey() {
+  if (!confirm('この端末に保存した APIキーを削除しますか？')) return;
+  settingsBusy(true);
+  try {
+    const status = await api('/api/settings', jsonOptions('PUT', { model: $('#modelInput').value.trim(), clearKey: true }));
+    $('#apiKeyInput').value = '';
+    updateApiStatus(status);
+    settingsMessage(status.configured ? '保存済みのキーを削除しました。環境変数のキーを使用します。' : '保存済みのキーを削除しました。');
+  } catch (error) { settingsMessage(error.message, true); }
+  finally { settingsBusy(false); }
+}
+
 function setBusy(busy) {
   state.busy = busy;
   $('#sendButton').disabled = busy;
@@ -690,6 +787,17 @@ $('#saveLocalButton').addEventListener('click', () => $('#saveLocalDialog').show
 $('#saveFolderButton').addEventListener('click', saveToFolder);
 $('#downloadZipButton').addEventListener('click', downloadZip);
 $('#closeSaveLocalButton').addEventListener('click', () => $('#saveLocalDialog').close());
+$('#settingsButton').addEventListener('click', openSettingsDialog);
+$('#closeSettingsButton').addEventListener('click', () => $('#settingsDialog').close());
+$('#toggleApiKeyButton').addEventListener('click', () => {
+  const input = $('#apiKeyInput');
+  input.type = input.type === 'password' ? 'text' : 'password';
+  $('#toggleApiKeyButton').textContent = input.type === 'password' ? '表示' : '隠す';
+});
+$('#loadModelsButton').addEventListener('click', loadModels);
+$('#testConnectionButton').addEventListener('click', checkSettingsConnection);
+$('#settingsForm').addEventListener('submit', saveSettings);
+$('#removeApiKeyButton').addEventListener('click', removeSavedApiKey);
 if (!window.showDirectoryPicker) {
   $('#saveFolderButton').disabled = true;
   $('#saveFolderButton small').textContent = 'このブラウザでは利用できません。ZIP を選んでください。';
@@ -784,8 +892,7 @@ $('#conversation').addEventListener('click', event => {
 
 try {
   const [status, data] = await Promise.all([api('/api/status'), api('/api/tree')]);
-  $('#apiStatus').classList.toggle('ready', status.configured);
-  $('#apiStatus').lastChild.textContent = status.configured ? ` AI 接続済み · ${status.model}` : ' AI キー未設定';
+  updateApiStatus(status);
   setWorkspaceInfo(status.projectName, status.projectPath);
   state.tree = data.tree;
   state.trash = data.trash;

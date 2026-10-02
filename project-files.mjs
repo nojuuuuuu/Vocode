@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
-const ignored = new Set(['.git', 'node_modules', '.vocode-trash', '.vocode-settings.json', '.DS_Store']);
+const ignored = new Set(['.git', 'node_modules', '.vocode-trash', '.vocode-settings.json', '.vocode-api-settings.json', '.DS_Store']);
 const maxFileBytes = 256_000;
 
 export function fileError(status, message) {

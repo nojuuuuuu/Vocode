@@ -1,5 +1,6 @@
 .env
 .vocode-settings.json
+.vocode-api-settings.json
 node_modules/
 public/editor-bundle.js
 **/.vocode-trash/

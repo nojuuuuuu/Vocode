@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { validatePath } from './project-files.mjs';
 import { archiveProject } from './project-archive.mjs';
 import { WorkspaceLocation, chooseWorkspaceFolder } from './workspace-location.mjs';
+import { ApiSettings, validKey, openaiModels, checkOpenaiModel } from './api-settings.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(root, 'public');
@@ -14,8 +15,7 @@ if (typeof process.loadEnvFile === 'function') {
 }
 const host = '127.0.0.1';
 const port = Number(process.env.PORT || 4173);
-const model = process.env.OPENAI_MODEL || 'gpt-6.1-sol';
-const key = process.env.OPENAI_API_KEY;
+const apiSettings = await new ApiSettings(root, { key: process.env.OPENAI_API_KEY, model: process.env.OPENAI_MODEL }).load();
 const maxFileBytes = 256_000;
 const workspaceLocation = new WorkspaceLocation(root, process.env.VOCODE_WORKSPACE ? path.resolve(process.env.VOCODE_WORKSPACE) : path.join(root, 'workspace'), !process.env.VOCODE_WORKSPACE);
 let project = await workspaceLocation.load();
@@ -58,7 +58,8 @@ function outputText(response) {
 }
 
 async function openaiResponse(payload) {
-  if (!key) throw httpError(503, 'OPENAI_API_KEY が設定されていません。README の手順で設定してください。');
+  const key = apiSettings.key;
+  if (!key) throw httpError(503, 'AI 設定から OpenAI APIキーを登録してください。');
   let response;
   try {
     response = await fetch('https://api.openai.com/v1/responses', {
@@ -118,7 +119,7 @@ async function assistant(req, res) {
     ? 'あなたは日本語で話す開発パートナーです。ユーザーの実装依頼に対し、作業フォルダ内のファイルの完全な置換内容を提案します。必要なファイルだけ返し、既存機能を壊さず、依頼を実際に動く形にしてください。削除やコマンド実行はできません。reply は変更の要約と確認方法を簡潔に書いてください。file path は提供された一覧または作業フォルダ内の新しい相対パスにします。'
     : 'あなたは日本語で話す開発パートナーです。提供されたプロジェクトの実コードに基づいて、質問に具体的かつ簡潔に答えてください。ファイル変更は提案しません。';
   const payload = {
-    model,
+    model: apiSettings.model,
     instructions,
     input: [
       ...history,
@@ -151,7 +152,8 @@ async function assistant(req, res) {
 }
 
 async function transcribe(req, res) {
-  if (!key) throw httpError(503, 'OPENAI_API_KEY が設定されていません。README の手順で設定してください。');
+  const key = apiSettings.key;
+  if (!key) throw httpError(503, 'AI 設定から OpenAI APIキーを登録してください。');
   const audio = await readBody(req, 12_000_000);
   if (!audio.length) throw httpError(400, '録音データがありません。');
   const mime = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
@@ -182,7 +184,24 @@ const server = http.createServer(async (req, res) => {
     if (req.headers.host !== `${host}:${port}`) throw httpError(403, 'このホストからはアクセスできません。');
     if (req.headers.origin && req.headers.origin !== `http://${host}:${port}`) throw httpError(403, 'このページからはアクセスできません。');
     const url = new URL(req.url, `http://${host}:${port}`);
-    if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, { configured: Boolean(key), model, projectName: path.basename(project.root), projectPath: project.root });
+    if (url.pathname === '/api/status' && req.method === 'GET') return send(res, 200, { ...apiSettings.publicStatus, projectName: path.basename(project.root), projectPath: project.root });
+    if (url.pathname === '/api/settings' && req.method === 'GET') return send(res, 200, apiSettings.publicStatus);
+    if (url.pathname === '/api/settings' && req.method === 'PUT') {
+      if (req.headers.origin !== `http://${host}:${port}`) throw httpError(403, 'このページから操作してください。');
+      return send(res, 200, await apiSettings.update(await readJson(req)));
+    }
+    if (url.pathname === '/api/models' && req.method === 'POST') {
+      if (req.headers.origin !== `http://${host}:${port}`) throw httpError(403, 'このページから操作してください。');
+      const body = await readJson(req);
+      const candidate = body.apiKey ? validKey(body.apiKey) : apiSettings.key;
+      return send(res, 200, { models: await openaiModels(candidate) });
+    }
+    if (url.pathname === '/api/settings/check' && req.method === 'POST') {
+      if (req.headers.origin !== `http://${host}:${port}`) throw httpError(403, 'このページから操作してください。');
+      const body = await readJson(req);
+      const candidate = body.apiKey ? validKey(body.apiKey) : apiSettings.key;
+      return send(res, 200, await checkOpenaiModel(candidate, body.model || apiSettings.model));
+    }
     if (url.pathname === '/api/workspace/choose' && req.method === 'POST') {
       if (choosingWorkspace) throw httpError(409, '保存先の選択画面はすでに開いています。');
       choosingWorkspace = true;
