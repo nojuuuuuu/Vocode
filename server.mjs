@@ -157,7 +157,7 @@ async function transcribe(req, res) {
   const audio = await readBody(req, 12_000_000);
   if (!audio.length) throw httpError(400, '録音データがありません。');
   const mime = String(req.headers['content-type'] || 'audio/webm').split(';')[0];
-  const extension = mime.includes('mp4') ? 'mp4' : mime.includes('ogg') ? 'ogg' : 'webm';
+  const extension = mime.includes('wav') ? 'wav' : mime.includes('mp4') ? 'mp4' : mime.includes('ogg') ? 'ogg' : 'webm';
   const form = new FormData();
   form.append('model', 'gpt-transcribe');
   form.append('file', new Blob([audio], { type: mime }), `voice.${extension}`);
@@ -262,7 +262,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET') {
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-      if (['index.html', 'app.js', 'editor-bundle.js', 'local-save.js', 'styles.css'].includes(file)) return await serveFile(res, path.join(publicRoot, file));
+      if (['index.html', 'app.js', 'editor-bundle.js', 'local-save.js', 'voice-activity.js', 'voice-capture-processor.js', 'styles.css'].includes(file)) return await serveFile(res, path.join(publicRoot, file));
     }
     throw httpError(404, '見つかりません。');
   } catch (error) {

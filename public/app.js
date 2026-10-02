@@ -1,8 +1,10 @@
 import { writeProjectToDirectory } from './local-save.js';
 import { createCodeEditor } from './editor-bundle.js';
+import { VoiceSegmenter, wavBlob } from './voice-activity.js';
 
 const $ = selector => document.querySelector(selector);
-const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, mode: 'ask', preview: false, busy: false, speaking: true, recorder: null, timer: null, messages: [] };
+const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, mode: 'ask', preview: false, busy: false, speaking: true, messages: [] };
+const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0 };
 const editor = createCodeEditor($('#codeEditor'), content => {
   if (!state.active) return;
   state.open.get(state.active).content = content;
@@ -523,6 +525,7 @@ function showError(message) { addMessage('assistant', message, true); }
 
 function updateApiStatus(status) {
   settingsStatus = status;
+  if (!status.configured && (voice.enabled || voice.starting)) stopVoiceListening();
   $('#apiStatus').classList.toggle('ready', status.configured);
   $('#apiStatus').lastChild.textContent = status.configured ? ` AI 設定済み · ${status.model}` : ' AI キー未設定';
   $('#apiKeyHint').textContent = status.keySource === 'saved'
@@ -620,16 +623,28 @@ async function removeSavedApiKey() {
 function setBusy(busy) {
   state.busy = busy;
   $('#sendButton').disabled = busy;
-  $('#micButton').disabled = busy;
   $('#sendButton').title = busy ? '回答を待っています' : '送信';
+}
+
+function releaseVoiceAfterSpeech(playbackId) {
+  if (playbackId !== voice.playbackId) return;
+  voice.suppressed = false;
+  voice.mutedUntil = Date.now() + 700;
+  updateVoiceDisplay();
 }
 
 function speak(text) {
   if (!state.speaking || !('speechSynthesis' in window)) return;
+  const playbackId = ++voice.playbackId;
   speechSynthesis.cancel();
+  voice.suppressed = true;
+  voice.segmenter?.reset();
+  updateVoiceDisplay();
   const utterance = new SpeechSynthesisUtterance(text.slice(0, 700));
   utterance.lang = 'ja-JP';
   utterance.rate = 1.05;
+  utterance.onend = () => releaseVoiceAfterSpeech(playbackId);
+  utterance.onerror = () => releaseVoiceAfterSpeech(playbackId);
   speechSynthesis.speak(utterance);
 }
 
@@ -691,10 +706,10 @@ function renderProposal(files) {
   $('#conversation').scrollTop = $('#conversation').scrollHeight;
 }
 
-async function sendMessage(value = messageInput.value) {
+async function sendMessage(value = messageInput.value, preserveInput = false) {
   const text = value.trim();
   if (!text || state.busy) return;
-  messageInput.value = '';
+  if (!preserveInput) messageInput.value = '';
   addMessage('user', text);
   const history = state.messages.slice(-8);
   state.messages.push({ role: 'user', content: text });
@@ -708,7 +723,7 @@ async function sendMessage(value = messageInput.value) {
     if (result.files?.length) renderProposal(result.files);
     speak(result.reply || '');
   } catch (error) { pending.remove(); showError(error.message); }
-  finally { setBusy(false); messageInput.focus(); }
+  finally { setBusy(false); if (!preserveInput) messageInput.focus(); }
 }
 
 function refreshPreview() {
@@ -730,49 +745,140 @@ async function togglePreview() {
   if (state.preview) refreshPreview();
 }
 
-async function toggleRecording() {
-  if (state.recorder) { state.recorder.stop(); return; }
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) return showError('このブラウザでは録音が使えません。Chrome または Edge の最新版でお試しください。');
+function updateVoiceDisplay() {
+  const active = voice.enabled || voice.starting;
+  const talking = voice.segmenter?.active && !voice.suppressed;
+  $('#micButton').classList.toggle('listening', active);
+  $('#micButton').classList.toggle('recording', Boolean(talking));
+  $('#micButton').disabled = false;
+  $('#micButton').title = active ? '音声待ち受けを停止' : '音声待ち受けを開始';
+  $('#micButton').setAttribute('aria-label', active ? '音声待ち受けを停止' : '音声待ち受けを開始');
+  $('#micButton').setAttribute('aria-pressed', String(active));
+  $('#micHint').textContent = active ? '待ち受けを停止' : '声で話す';
+  $('#recordingBanner').hidden = !active;
+  $('#recordingBanner').classList.toggle('speaking', Boolean(talking));
+  $('#voiceStatus').textContent = voice.starting ? 'マイクを準備しています…'
+    : voice.suppressed || Date.now() < voice.mutedUntil ? '回答の読み上げ中は一時停止しています'
+      : talking ? '聞き取っています。話し終えると自動送信します'
+        : voice.processing || voice.queue.length ? '音声を処理中。次の発話も聞いています'
+          : '声を待っています。話し終えると自動送信します';
+  $('#recordingTime').textContent = talking ? `${Math.floor(voice.segmenter.recordedSamples / voice.segmenter.sampleRate)}秒` : '';
+}
+
+function stopVoiceListening() {
+  voice.generation++;
+  voice.enabled = false;
+  voice.starting = false;
+  voice.queue = [];
+  voice.abort?.abort();
+  voice.abort = null;
+  voice.node?.disconnect();
+  voice.node = null;
+  voice.stream?.getTracks().forEach(track => track.stop());
+  voice.stream = null;
+  voice.context?.close().catch(() => {});
+  voice.context = null;
+  voice.segmenter = null;
+  updateVoiceDisplay();
+}
+
+async function waitUntilReady(generation) {
+  while (voice.enabled && voice.generation === generation && state.busy) {
+    await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  return voice.enabled && voice.generation === generation;
+}
+
+async function processVoiceQueue() {
+  if (voice.processing) return;
+  voice.processing = true;
+  const generation = voice.generation;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type));
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    state.recorder = recorder;
-    const chunks = [];
-    const started = Date.now();
-    recorder.addEventListener('dataavailable', event => { if (event.data.size) chunks.push(event.data); });
-    recorder.addEventListener('stop', async () => {
-      stream.getTracks().forEach(track => track.stop());
-      state.recorder = null;
-      clearInterval(state.timer);
-      $('#recordingBanner').hidden = true;
-      $('#micButton').classList.remove('recording');
-      $('#micHint').textContent = '声で話す';
-      if (!chunks.length) return showError('音声を録音できませんでした。');
-      setBusy(true);
+    while (voice.enabled && voice.generation === generation && voice.queue.length) {
+      const blob = voice.queue.shift();
       const pending = addMessage('assistant', '音声を文字にしています…');
+      const abort = new AbortController();
+      voice.abort = abort;
+      updateVoiceDisplay();
       try {
-        const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
-        const response = await fetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
+        const response = await fetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob, signal: abort.signal });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '音声を文字にできませんでした。');
+        if (!await waitUntilReady(generation)) break;
+        if (data.text?.trim()) await sendMessage(data.text, true);
+      } catch (error) {
+        if (error.name !== 'AbortError' && voice.enabled && voice.generation === generation) showError(error.message);
+      } finally {
         pending.remove();
-        setBusy(false);
-        messageInput.value = data.text;
-        if (data.text.trim()) await sendMessage(data.text);
-        else showError('声を聞き取れませんでした。もう一度お試しください。');
-      } catch (error) { pending.remove(); showError(error.message); setBusy(false); }
+        if (voice.abort === abort) voice.abort = null;
+      }
+    }
+  } finally {
+    voice.processing = false;
+    updateVoiceDisplay();
+    if (voice.enabled && voice.queue.length) processVoiceQueue();
+  }
+}
+
+function receiveVoiceSamples(samples) {
+  if (!voice.enabled || !voice.segmenter) return;
+  if (voice.suppressed || Date.now() < voice.mutedUntil) {
+    voice.segmenter.reset();
+    return;
+  }
+  const result = voice.segmenter.push(samples);
+  if (result.started) updateVoiceDisplay();
+  if (voice.segmenter.active) $('#recordingTime').textContent = `${Math.floor(voice.segmenter.recordedSamples / voice.segmenter.sampleRate)}秒`;
+  if (result.audio) {
+    if (voice.queue.length < 4) voice.queue.push(wavBlob(result.audio, voice.segmenter.sampleRate));
+    else showError('音声がたまっています。回答が終わるまで少しお待ちください。');
+    updateVoiceDisplay();
+    processVoiceQueue();
+  }
+}
+
+async function toggleVoiceListening() {
+  if (voice.enabled || voice.starting) { stopVoiceListening(); return; }
+  if (!settingsStatus.configured) { showError('右上の AI 設定で OpenAI APIキーを登録してください。'); openSettingsDialog(); return; }
+  if (!navigator.mediaDevices?.getUserMedia || !window.AudioWorkletNode) return showError('このブラウザでは音声待ち受けを使えません。Chrome または Edge の最新版でお試しください。');
+  const generation = ++voice.generation;
+  voice.starting = true;
+  updateVoiceDisplay();
+  let stream;
+  let context;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    if (voice.generation !== generation) { stream.getTracks().forEach(track => track.stop()); return; }
+    context = new AudioContext();
+    await context.audioWorklet.addModule('/voice-capture-processor.js');
+    await context.resume();
+    if (voice.generation !== generation) { stream.getTracks().forEach(track => track.stop()); await context.close(); return; }
+    const source = context.createMediaStreamSource(stream);
+    const node = new AudioWorkletNode(context, 'vocode-voice-capture');
+    source.connect(node);
+    node.connect(context.destination);
+    voice.stream = stream;
+    voice.context = context;
+    voice.node = node;
+    voice.segmenter = new VoiceSegmenter(context.sampleRate);
+    voice.enabled = true;
+    voice.starting = false;
+    node.port.onmessage = event => receiveVoiceSamples(event.data);
+    stream.getAudioTracks()[0].addEventListener('ended', () => {
+      if (voice.enabled && voice.stream === stream) {
+        stopVoiceListening();
+        showError('マイクが切断されました。音声待ち受けを再開してください。');
+      }
     });
-    recorder.start();
-    $('#recordingBanner').hidden = false;
-    $('#micButton').classList.add('recording');
-    $('#micHint').textContent = '録音を止める';
-    state.timer = setInterval(() => {
-      const seconds = Math.floor((Date.now() - started) / 1000);
-      $('#recordingTime').textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
-      if (seconds >= 60 && state.recorder?.state === 'recording') state.recorder.stop();
-    }, 250);
-  } catch { showError('マイクを使えませんでした。ブラウザのマイク許可を確認してください。'); }
+    updateVoiceDisplay();
+  } catch {
+    stream?.getTracks().forEach(track => track.stop());
+    context?.close().catch(() => {});
+    if (voice.generation !== generation) return;
+    voice.starting = false;
+    updateVoiceDisplay();
+    showError('マイクを使えませんでした。ブラウザのマイク許可を確認してください。');
+  }
 }
 
 document.addEventListener('keydown', event => {
@@ -781,6 +887,7 @@ document.addEventListener('keydown', event => {
 window.addEventListener('beforeunload', event => {
   if ([...state.open.values()].some(file => file.content !== file.saved)) { event.preventDefault(); event.returnValue = ''; }
 });
+window.addEventListener('pagehide', stopVoiceListening);
 $('#saveButton').addEventListener('click', saveActive);
 $('#previewButton').addEventListener('click', togglePreview);
 $('#saveLocalButton').addEventListener('click', () => $('#saveLocalDialog').showModal());
@@ -807,12 +914,12 @@ $('#askMode').addEventListener('click', () => setMode('ask'));
 $('#buildMode').addEventListener('click', () => setMode('build'));
 $('#sendButton').addEventListener('click', () => sendMessage());
 messageInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); } });
-$('#micButton').addEventListener('click', toggleRecording);
+$('#micButton').addEventListener('click', toggleVoiceListening);
 $('#speakButton').addEventListener('click', () => {
   state.speaking = !state.speaking;
   $('#speakButton').classList.toggle('active', state.speaking);
   $('#speakButton').title = state.speaking ? '回答を読み上げる' : '読み上げはオフ';
-  if (!state.speaking && 'speechSynthesis' in window) speechSynthesis.cancel();
+  if (!state.speaking && 'speechSynthesis' in window) { ++voice.playbackId; speechSynthesis.cancel(); releaseVoiceAfterSpeech(voice.playbackId); }
 });
 $('#newFileButton').addEventListener('click', () => openEntryDialog('file'));
 $('#newFolderButton').addEventListener('click', () => openEntryDialog('folder'));
