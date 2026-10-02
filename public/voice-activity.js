@@ -60,6 +60,20 @@ export class VoiceSegmenter {
   }
 }
 
+export function parseVoiceTranscript(value) {
+  const text = String(value || '').trim();
+  if (/^送信[。．.!！?？]*$/u.test(text)) return { content: '', send: true };
+  const combined = /^([\s\S]*?)[\s、，,。．.!！?？]+送信[。．.!！?？]*$/u.exec(text);
+  if (combined) return { content: combined[1].trim(), send: true };
+  return { content: text, send: false };
+}
+
+export function updateVoiceDraft(draft, transcript) {
+  const { content, send } = parseVoiceTranscript(transcript);
+  const next = content ? (draft.trim() ? `${draft.trimEnd()}\n${content}` : content) : draft;
+  return { draft: next, send };
+}
+
 export function wavBlob(samples, inputRate, outputRate = 16000) {
   const rate = Math.min(inputRate, outputRate);
   const ratio = inputRate / rate;

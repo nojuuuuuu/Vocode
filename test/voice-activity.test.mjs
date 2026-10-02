@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { VoiceSegmenter, wavBlob } from '../public/voice-activity.js';
+import { VoiceSegmenter, parseVoiceTranscript, updateVoiceDraft, wavBlob } from '../public/voice-activity.js';
+
+test('voice pauses keep a draft until an explicit send command', () => {
+  assert.deepEqual(parseVoiceTranscript('まずこの画面の'), { content: 'まずこの画面の', send: false });
+  assert.deepEqual(parseVoiceTranscript('色を変えてください。'), { content: '色を変えてください。', send: false });
+  assert.deepEqual(parseVoiceTranscript('送信。'), { content: '', send: true });
+  assert.deepEqual(parseVoiceTranscript('ボタンを変えて、送信。'), { content: 'ボタンを変えて', send: true });
+  assert.deepEqual(parseVoiceTranscript('送信ボタンを追加して。'), { content: '送信ボタンを追加して。', send: false });
+  assert.deepEqual(parseVoiceTranscript('未送信'), { content: '未送信', send: false });
+  const first = updateVoiceDraft('', 'まずこの画面の');
+  assert.deepEqual(first, { draft: 'まずこの画面の', send: false });
+  const second = updateVoiceDraft(first.draft, '色を変えてください。');
+  assert.deepEqual(second, { draft: 'まずこの画面の\n色を変えてください。', send: false });
+  assert.deepEqual(updateVoiceDraft(second.draft, '送信。'), { draft: second.draft, send: true });
+});
 
 test('continuous listening ignores idle noise and splits speech after a pause', () => {
   const detector = new VoiceSegmenter(1000);

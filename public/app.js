@@ -1,10 +1,10 @@
 import { writeProjectToDirectory } from './local-save.js';
 import { createCodeEditor } from './editor-bundle.js';
-import { VoiceSegmenter, wavBlob } from './voice-activity.js';
+import { VoiceSegmenter, updateVoiceDraft, wavBlob } from './voice-activity.js';
 
 const $ = selector => document.querySelector(selector);
 const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, busy: false, speaking: true, messages: [] };
-const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0 };
+const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0, draftNotice: false };
 const editor = createCodeEditor($('#codeEditor'), content => {
   if (!state.active) return;
   state.open.get(state.active).content = content;
@@ -701,6 +701,8 @@ async function sendMessage(value = messageInput.value, preserveInput = false) {
   const text = value.trim();
   if (!text || state.busy) return;
   if (!preserveInput) messageInput.value = '';
+  voice.draftNotice = false;
+  updateVoiceDisplay();
   addMessage('user', text);
   const history = state.messages.slice(-8);
   state.messages.push({ role: 'user', content: text });
@@ -751,9 +753,10 @@ function updateVoiceDisplay() {
   $('#recordingBanner').classList.toggle('speaking', Boolean(talking));
   $('#voiceStatus').textContent = voice.starting ? 'マイクを準備しています…'
     : voice.suppressed || Date.now() < voice.mutedUntil ? '回答の読み上げ中は一時停止しています'
-      : talking ? '聞き取っています。話し終えると自動送信します'
+      : talking ? '聞き取っています。話し終えると下書きに追加します'
         : voice.processing || voice.queue.length ? '音声を処理中。次の発話も聞いています'
-          : '声を待っています。話し終えると自動送信します';
+          : voice.draftNotice ? '下書きに追加しました。「送信」と言うと送ります'
+            : '声を待っています。「送信」と言うと送ります';
   $('#recordingTime').textContent = talking ? `${Math.floor(voice.segmenter.recordedSamples / voice.segmenter.sampleRate)}秒` : '';
 }
 
@@ -762,6 +765,7 @@ function stopVoiceListening() {
   voice.enabled = false;
   voice.starting = false;
   voice.queue = [];
+  voice.draftNotice = false;
   voice.abort?.abort();
   voice.abort = null;
   voice.node?.disconnect();
@@ -796,8 +800,18 @@ async function processVoiceQueue() {
         const response = await fetch('/api/transcribe', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob, signal: abort.signal });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || '音声を文字にできませんでした。');
-        if (!await waitUntilReady(generation)) break;
-        if (data.text?.trim()) await sendMessage(data.text, true);
+        pending.remove();
+        if (!voice.enabled || voice.generation !== generation) break;
+        const { draft, send } = updateVoiceDraft(messageInput.value, data.text);
+        if (draft !== messageInput.value) {
+          messageInput.value = draft;
+          messageInput.scrollTop = messageInput.scrollHeight;
+          voice.draftNotice = true;
+        }
+        if (send) {
+          if (!messageInput.value.trim()) showToast('送る内容がありません。先に話してください。');
+          else if (await waitUntilReady(generation)) await sendMessage();
+        }
       } catch (error) {
         if (error.name !== 'AbortError' && voice.enabled && voice.generation === generation) showError(error.message);
       } finally {
@@ -819,7 +833,7 @@ function receiveVoiceSamples(samples) {
     return;
   }
   const result = voice.segmenter.push(samples);
-  if (result.started) updateVoiceDisplay();
+  if (result.started) { voice.draftNotice = false; updateVoiceDisplay(); }
   if (voice.segmenter.active) $('#recordingTime').textContent = `${Math.floor(voice.segmenter.recordedSamples / voice.segmenter.sampleRate)}秒`;
   if (result.audio) {
     if (voice.queue.length < 4) voice.queue.push(wavBlob(result.audio, voice.segmenter.sampleRate));
