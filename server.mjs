@@ -6,6 +6,7 @@ import { validatePath } from './project-files.mjs';
 import { archiveProject } from './project-archive.mjs';
 import { WorkspaceLocation, chooseWorkspaceFolder } from './workspace-location.mjs';
 import { ApiSettings, validKey, openaiModels, checkOpenaiModel } from './api-settings.mjs';
+import { normalizeAssistantResult } from './assistant-intent.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(root, 'public');
@@ -93,7 +94,6 @@ async function projectContext(activeFile) {
 
 async function assistant(req, res) {
   const body = await readJson(req);
-  const mode = body.mode === 'build' ? 'build' : 'ask';
   const message = String(body.message || '').trim().slice(0, 5000);
   if (!message) throw httpError(400, '質問か依頼を入力してください。');
   const activeFile = body.activeFile ? validatePath(body.activeFile) : '';
@@ -115,9 +115,7 @@ async function assistant(req, res) {
     role: item.role === 'assistant' ? 'assistant' : 'user',
     content: String(item.content || '').slice(0, 2000)
   })) : [];
-  const instructions = mode === 'build'
-    ? 'あなたは日本語で話す開発パートナーです。ユーザーの実装依頼に対し、作業フォルダ内のファイルの完全な置換内容を提案します。必要なファイルだけ返し、既存機能を壊さず、依頼を実際に動く形にしてください。削除やコマンド実行はできません。reply は変更の要約と確認方法を簡潔に書いてください。file path は提供された一覧または作業フォルダ内の新しい相対パスにします。'
-    : 'あなたは日本語で話す開発パートナーです。提供されたプロジェクトの実コードに基づいて、質問に具体的かつ簡潔に答えてください。ファイル変更は提案しません。';
+  const instructions = 'あなたは日本語で話す開発パートナーです。毎回、最新のユーザー発話を会話履歴と提供されたプロジェクトの実コードに照らして判断してください。説明、相談、質問、実装できるかどうかの確認なら action は answer にし、files は空配列にして具体的に回答します。ファイルを作る、修正する、機能を追加するなど、コード変更を明確に依頼された場合は action を edit にし、必要なファイルだけ完全な置換内容を files に返します。質問と実装依頼が混ざっていたら説明を reply に含めて edit にします。意図や変更内容が曖昧で安全に実装できない場合は action を answer にし、必要な点を質問します。変更案では既存機能を壊さず、reply に変更の要約と確認方法を簡潔に書いてください。file path は提供された一覧か作業フォルダ内の新しい相対パスにします。削除やコマンド実行はできません。変更案はユーザーの確認後に適用されます。';
   const payload = {
     model: apiSettings.model,
     instructions,
@@ -131,10 +129,11 @@ async function assistant(req, res) {
         schema: {
           type: 'object', additionalProperties: false,
           properties: {
+            action: { type: 'string', enum: ['answer', 'edit'] },
             reply: { type: 'string' },
             files: { type: 'array', items: { type: 'object', additionalProperties: false,
               properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } }
-          }, required: ['reply', 'files']
+          }, required: ['action', 'reply', 'files']
         }
       }
     },
@@ -144,11 +143,7 @@ async function assistant(req, res) {
   let result;
   try { result = JSON.parse(outputText(response)); }
   catch { throw httpError(502, 'AI の応答を読み取れませんでした。もう一度お試しください。'); }
-  const files = mode === 'build' && Array.isArray(result.files) ? result.files.slice(0, 15).map(file => ({
-    path: validatePath(file.path), content: String(file.content)
-  })) : [];
-  if (files.some(file => Buffer.byteLength(file.content) > maxFileBytes)) throw httpError(413, 'AI の変更案に大きすぎるファイルがあります。');
-  send(res, 200, { reply: String(result.reply || ''), files });
+  send(res, 200, normalizeAssistantResult(result, maxFileBytes));
 }
 
 async function transcribe(req, res) {

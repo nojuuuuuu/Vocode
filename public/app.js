@@ -3,7 +3,7 @@ import { createCodeEditor } from './editor-bundle.js';
 import { VoiceSegmenter, wavBlob } from './voice-activity.js';
 
 const $ = selector => document.querySelector(selector);
-const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, mode: 'ask', preview: false, busy: false, speaking: true, messages: [] };
+const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, busy: false, speaking: true, messages: [] };
 const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0 };
 const editor = createCodeEditor($('#codeEditor'), content => {
   if (!state.active) return;
@@ -495,15 +495,6 @@ async function switchWorkspace(options) {
   } finally { controls.forEach(control => { control.disabled = false; }); }
 }
 
-function setMode(mode) {
-  state.mode = mode;
-  for (const [name, button] of [['ask', $('#askMode')], ['build', $('#buildMode')]]) {
-    button.classList.toggle('active', mode === name);
-    button.setAttribute('aria-selected', String(mode === name));
-  }
-  messageInput.placeholder = mode === 'build' ? '作ってほしい機能を伝えてください…' : '質問したいことを入力…';
-}
-
 function addMessage(role, content, isError = false) {
   const welcome = $('.welcome');
   if (welcome) welcome.remove();
@@ -716,9 +707,10 @@ async function sendMessage(value = messageInput.value, preserveInput = false) {
   setBusy(true);
   const pending = addMessage('assistant', '考えています…');
   try {
-    const result = await api('/api/assistant', jsonOptions('POST', { mode: state.mode, message: text, activeFile: state.active, activeContent: state.open.get(state.active)?.content, history }));
+    const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile: state.active, activeContent: state.open.get(state.active)?.content, history }));
     pending.remove();
-    addMessage('assistant', result.reply || '回答がありませんでした。');
+    const answer = addMessage('assistant', result.reply || '回答がありませんでした。');
+    answer.querySelector('.message-label').textContent = result.files?.length ? 'Vocode · 変更案' : 'Vocode · 回答';
     state.messages.push({ role: 'assistant', content: result.reply || '' });
     if (result.files?.length) renderProposal(result.files);
     speak(result.reply || '');
@@ -910,8 +902,6 @@ if (!window.showDirectoryPicker) {
   $('#saveFolderButton small').textContent = 'このブラウザでは利用できません。ZIP を選んでください。';
 }
 $('#refreshPreviewButton').addEventListener('click', refreshPreview);
-$('#askMode').addEventListener('click', () => setMode('ask'));
-$('#buildMode').addEventListener('click', () => setMode('build'));
 $('#sendButton').addEventListener('click', () => sendMessage());
 messageInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); } });
 $('#micButton').addEventListener('click', toggleVoiceListening);
@@ -992,7 +982,6 @@ $('#closeHelpButton').addEventListener('click', () => $('#helpDialog').close());
 $('#conversation').addEventListener('click', event => {
   const button = event.target.closest('[data-suggestion]');
   if (!button) return;
-  setMode(button.dataset.suggestion.includes('実装') ? 'build' : 'ask');
   messageInput.value = button.dataset.suggestion;
   messageInput.focus();
 });
