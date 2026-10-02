@@ -3,7 +3,7 @@ import { createCodeEditor } from './editor-bundle.js';
 import { VoiceSegmenter, updateVoiceDraft, wavBlob } from './voice-activity.js';
 
 const $ = selector => document.querySelector(selector);
-const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, busy: false, speaking: true, messages: [] };
+const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, busy: false, speaking: true, webSearch: localStorage.getItem('vocode-web-search') !== 'off', messages: [] };
 const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0, draftNotice: false };
 const editor = createCodeEditor($('#codeEditor'), content => {
   if (!state.active) return;
@@ -505,14 +505,59 @@ function addMessage(role, content, isError = false) {
   label.textContent = role === 'user' ? 'あなた' : 'Vocode';
   const body = document.createElement('div');
   body.className = 'message-body';
-  body.textContent = content;
+  if (role === 'assistant' && !isError) appendLinkedText(body, content);
+  else body.textContent = content;
   message.append(label, body);
   $('#conversation').append(message);
   $('#conversation').scrollTop = $('#conversation').scrollHeight;
   return message;
 }
 
+function appendLinkedText(target, content) {
+  const markdownLink = /\[([^\]\n]{1,160})\]\((https?:\/\/[^\s)]+)\)/g;
+  let offset = 0;
+  for (const match of content.matchAll(markdownLink)) {
+    target.append(document.createTextNode(content.slice(offset, match.index)));
+    try {
+      const url = new URL(match[2]);
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid link');
+      const link = document.createElement('a');
+      link.href = url.href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = match[1];
+      target.append(link);
+    } catch { target.append(document.createTextNode(match[0])); }
+    offset = match.index + match[0].length;
+  }
+  target.append(document.createTextNode(content.slice(offset)));
+}
+
 function showError(message) { addMessage('assistant', message, true); }
+
+function renderWebSources(message, sources) {
+  if (!Array.isArray(sources) || !sources.length) return;
+  const box = document.createElement('div');
+  box.className = 'web-sources';
+  const label = document.createElement('span');
+  label.className = 'web-sources-label';
+  label.textContent = '参照したページ';
+  box.append(label);
+  for (const source of sources) {
+    try {
+      const url = new URL(source.url);
+      if (!['https:', 'http:'].includes(url.protocol)) continue;
+      const link = document.createElement('a');
+      link.href = url.href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.textContent = source.title || url.hostname;
+      link.title = url.href;
+      box.append(link);
+    } catch { /* Ignore invalid source URLs. */ }
+  }
+  if (box.children.length > 1) message.querySelector('.message-body').append(box);
+}
 
 function updateApiStatus(status) {
   settingsStatus = status;
@@ -617,6 +662,13 @@ function setBusy(busy) {
   $('#sendButton').title = busy ? '回答を待っています' : '送信';
 }
 
+function updateWebSearchButton() {
+  const button = $('#webSearchButton');
+  button.classList.toggle('active', state.webSearch);
+  button.setAttribute('aria-pressed', String(state.webSearch));
+  button.title = state.webSearch ? '必要なときにWeb検索を使う' : 'Web検索はオフ';
+}
+
 function releaseVoiceAfterSpeech(playbackId) {
   if (playbackId !== voice.playbackId) return;
   voice.suppressed = false;
@@ -709,10 +761,11 @@ async function sendMessage(value = messageInput.value, preserveInput = false) {
   setBusy(true);
   const pending = addMessage('assistant', '考えています…');
   try {
-    const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile: state.active, activeContent: state.open.get(state.active)?.content, history }));
+    const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile: state.active, activeContent: state.open.get(state.active)?.content, history, webSearch: state.webSearch }));
     pending.remove();
     const answer = addMessage('assistant', result.reply || '回答がありませんでした。');
-    answer.querySelector('.message-label').textContent = result.files?.length ? 'Vocode · 変更案' : 'Vocode · 回答';
+    answer.querySelector('.message-label').textContent = `Vocode · ${result.files?.length ? '変更案' : '回答'}${result.webSearchUsed ? ' · Web検索' : ''}`;
+    renderWebSources(answer, result.sources);
     state.messages.push({ role: 'assistant', content: result.reply || '' });
     if (result.files?.length) renderProposal(result.files);
     speak(result.reply || '');
@@ -917,6 +970,12 @@ if (!window.showDirectoryPicker) {
 }
 $('#refreshPreviewButton').addEventListener('click', refreshPreview);
 $('#sendButton').addEventListener('click', () => sendMessage());
+$('#webSearchButton').addEventListener('click', () => {
+  state.webSearch = !state.webSearch;
+  localStorage.setItem('vocode-web-search', state.webSearch ? 'auto' : 'off');
+  updateWebSearchButton();
+});
+updateWebSearchButton();
 messageInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); } });
 $('#micButton').addEventListener('click', toggleVoiceListening);
 $('#speakButton').addEventListener('click', () => {
