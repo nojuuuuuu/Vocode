@@ -34,7 +34,7 @@
       <button id="chooseWorkspaceButton" class="top-center workspace-picker" type="button" title="作業フォルダを選ぶ"><span class="project-icon">◇</span> <span id="projectName">workspace</span><span class="chevron">⌄</span></button>
       <div class="top-actions"><button id="saveLocalButton" class="export-button" title="プロジェクトをローカルに保存"><svg><use href="#i-download"/></svg>ローカルに保存</button><span id="apiStatus" class="api-status"><span class="status-dot"></span> 接続確認中</span><button id="settingsButton" class="top-settings" type="button" title="AI 設定" aria-label="AI 設定"><svg><use href="#i-settings"/></svg></button><button id="helpButton" class="top-help" title="使い方">?</button></div>
     </header>
-    <div class="workspace-layout">
+    <div id="workspaceLayout" class="workspace-layout">
       <aside class="sidebar">
         <div class="sidebar-heading"><span>EXPLORER</span><div class="sidebar-actions"><button id="newFileButton" class="icon-button" title="新しいファイル" aria-label="新しいファイル"><svg><use href="#i-file"/></svg></button><button id="newFolderButton" class="icon-button" title="新しいフォルダ" aria-label="新しいフォルダ"><svg><use href="#i-folder"/></svg></button><button id="refreshTreeButton" class="icon-button" title="ファイル一覧を更新" aria-label="ファイル一覧を更新"><svg><use href="#i-refresh"/></svg></button></div></div>
         <div id="projectHeading" class="project-heading" title="ここに移動できます"><span class="project-caret">⌄</span><span class="project-folder">▱</span> <span id="projectFolderName">workspace</span></div>
@@ -55,6 +55,7 @@
         <div id="previewView" class="preview-view" hidden><div class="preview-toolbar"><span>ライブプレビュー</span><button id="refreshPreviewButton" class="icon-button" title="更新"><svg><use href="#i-refresh"/></svg></button></div><iframe id="previewFrame" title="プロジェクトのプレビュー" sandbox="allow-scripts"></iframe></div>
       </main>
 
+      <div id="panelDivider" class="panel-divider" role="separator" aria-orientation="vertical" aria-label="コードとAIの幅を調整" aria-valuemin="260" aria-valuenow="375" tabindex="0" title="ドラッグまたは左右キーで幅を調整。ダブルクリックで元に戻す"></div>
       <aside class="assistant-panel">
         <div class="assistant-header"><div><span class="assistant-eyebrow">YOUR CODING PARTNER</span><h1>声で、つくる。<span class="sparkle">✦</span></h1><p>手を止めずに聞いて、頼んで、進めよう。</p></div><div class="assistant-avatar"><svg><use href="#i-spark"/></svg></div></div>
         <p class="intent-hint">質問も実装依頼も、ここでそのまま話してください。内容に応じて回答か変更案を作ります。</p>
@@ -70,7 +71,7 @@
   <dialog id="saveLocalDialog" class="modal"><h2>ローカルに保存</h2><p>編集中の内容は、上部に表示された作業フォルダへ自動保存されます。別の場所へコピーする場合は方法を選んでください。</p><div class="save-options"><button id="saveFolderButton" type="button"><svg><use href="#i-folder"/></svg><span><strong>フォルダへコピー</strong><small>別の保存先へファイルを書き込みます。Chrome / Edge 対応。</small></span></button><button id="downloadZipButton" type="button"><svg><use href="#i-download"/></svg><span><strong>ZIP をダウンロード</strong><small>プロジェクト全体を1つのファイルにまとめます。</small></span></button></div><div class="modal-actions"><button id="closeSaveLocalButton" type="button" class="secondary">閉じる</button></div></dialog>
   <div id="toast" class="toast" role="status" hidden></div>
   <div id="entryMenu" class="entry-menu" hidden></div>
-  <dialog id="helpDialog" class="modal"><h2>Vocode の使い方</h2><p>上部のフォルダ名から作業フォルダを選べます。新しいファイルやフォルダはその中へ作成され、編集内容も自動保存されます。左側では項目の右クリックから名前変更、移動、ゴミ箱への移動ができます。</p><p>中央でコードを編集できます。右上の「ローカルに保存」から別のフォルダへのコピーやZIPダウンロードもできます。</p><p>右側の入力欄では、質問には回答し、明確な実装依頼には変更案を作ります。変更案の内容を確認してから適用できます。Webが有効なら、必要なときに検索して参照ページを表示します。AI のAPIキーとモデルは右上の歯車から設定できます。マイクを一度押すと音声待ち受けが始まり、発話は入力欄に追加されます。最後に「送信」と言うと送られ、もう一度マイクを押すと待ち受けを停止します。</p><div class="modal-actions"><button id="closeHelpButton" type="button" class="primary">閉じる</button></div></dialog>
+  <dialog id="helpDialog" class="modal"><h2>Vocode の使い方</h2><p>上部のフォルダ名から作業フォルダを選べます。新しいファイルやフォルダはその中へ作成され、編集内容も自動保存されます。左側では項目の右クリックから名前変更、移動、ゴミ箱への移動ができます。</p><p>中央でコードを編集できます。コード欄とAI欄の境目をドラッグすると幅を変えられます。右上の「ローカルに保存」から別のフォルダへのコピーやZIPダウンロードもできます。</p><p>右側の入力欄では、質問には回答し、明確な実装依頼には変更案を作ります。変更案の内容を確認してから適用できます。Webが有効なら、必要なときに検索して参照ページを表示します。AI のAPIキーとモデルは右上の歯車から設定できます。マイクを一度押すと音声待ち受けが始まり、発話は入力欄に追加されます。最後に「送信」と言うと送られ、もう一度マイクを押すと待ち受けを停止します。</p><div class="modal-actions"><button id="closeHelpButton" type="button" class="primary">閉じる</button></div></dialog>
   <script type="module" src="/app.js"></script>
 </body>
 </html>

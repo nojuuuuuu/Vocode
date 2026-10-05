@@ -16,6 +16,74 @@ const messageInput = $('#messageInput');
 const welcomeTemplate = $('.welcome').cloneNode(true);
 let settingsStatus = { configured: false, model: '', keySource: 'none' };
 
+const panelLayout = $('#workspaceLayout');
+const panelDivider = $('#panelDivider');
+const panelWidthKey = 'vocode-assistant-width';
+const savedPanelWidth = Number(localStorage.getItem(panelWidthKey));
+const defaultPanelWidth = () => window.matchMedia('(max-width: 1050px)').matches ? 300 : 375;
+let customPanelWidth = Number.isFinite(savedPanelWidth) && savedPanelWidth > 0;
+let preferredPanelWidth = customPanelWidth ? savedPanelWidth : defaultPanelWidth();
+
+function applyPanelWidth() {
+  const sidebarWidth = $('.sidebar').getBoundingClientRect().width;
+  const maxWidth = Math.max(260, Math.floor(panelLayout.clientWidth - sidebarWidth - panelDivider.offsetWidth - 280));
+  const width = Math.min(maxWidth, Math.max(260, Math.round(preferredPanelWidth)));
+  panelLayout.style.setProperty('--assistant-width', `${width}px`);
+  panelDivider.setAttribute('aria-valuemax', String(maxWidth));
+  panelDivider.setAttribute('aria-valuenow', String(width));
+  panelDivider.setAttribute('aria-valuetext', `AIパネル ${width}px`);
+  return width;
+}
+
+let panelDrag = null;
+panelDivider.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  panelDrag = { pointerId: event.pointerId, startX: event.clientX, startWidth: applyPanelWidth(), moved: false };
+  panelDivider.setPointerCapture(event.pointerId);
+  panelDivider.classList.add('dragging');
+  document.body.classList.add('resizing-panels');
+});
+panelDivider.addEventListener('pointermove', event => {
+  if (!panelDrag || event.pointerId !== panelDrag.pointerId) return;
+  if (Math.abs(panelDrag.startX - event.clientX) < 2) return;
+  panelDrag.moved = true;
+  customPanelWidth = true;
+  preferredPanelWidth = panelDrag.startWidth + panelDrag.startX - event.clientX;
+  applyPanelWidth();
+});
+function finishPanelDrag(event) {
+  if (!panelDrag || event.pointerId !== panelDrag.pointerId) return;
+  const moved = panelDrag.moved;
+  panelDrag = null;
+  panelDivider.classList.remove('dragging');
+  document.body.classList.remove('resizing-panels');
+  if (moved) localStorage.setItem(panelWidthKey, String(applyPanelWidth()));
+}
+panelDivider.addEventListener('pointerup', finishPanelDrag);
+panelDivider.addEventListener('pointercancel', finishPanelDrag);
+panelDivider.addEventListener('keydown', event => {
+  const step = event.shiftKey ? 50 : 20;
+  if (event.key === 'ArrowLeft') preferredPanelWidth += step;
+  else if (event.key === 'ArrowRight') preferredPanelWidth -= step;
+  else if (event.key === 'Home') preferredPanelWidth = 260;
+  else if (event.key === 'End') preferredPanelWidth = Number(panelDivider.getAttribute('aria-valuemax'));
+  else return;
+  event.preventDefault();
+  customPanelWidth = true;
+  localStorage.setItem(panelWidthKey, String(applyPanelWidth()));
+});
+panelDivider.addEventListener('dblclick', () => {
+  customPanelWidth = false;
+  preferredPanelWidth = defaultPanelWidth();
+  localStorage.removeItem(panelWidthKey);
+  applyPanelWidth();
+});
+window.addEventListener('resize', () => {
+  if (!customPanelWidth) preferredPanelWidth = defaultPanelWidth();
+  applyPanelWidth();
+});
+applyPanelWidth();
+
 async function api(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
