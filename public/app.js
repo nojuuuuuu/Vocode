@@ -3,8 +3,8 @@ import { createCodeEditor } from './editor-bundle.js';
 import { VoiceSegmenter, updateVoiceDraft, wavBlob } from './voice-activity.js';
 
 const $ = selector => document.querySelector(selector);
-const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, busy: false, speaking: true, webSearch: localStorage.getItem('vocode-web-search') !== 'off', messages: [] };
-const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0, draftNotice: false };
+const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, speaking: true, webSearch: localStorage.getItem('vocode-web-search') !== 'off' };
+const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0, draftNotice: false, recordingAgentId: null };
 const editor = createCodeEditor($('#codeEditor'), content => {
   if (!state.active) return;
   state.open.get(state.active).content = content;
@@ -15,6 +15,121 @@ const editor = createCodeEditor($('#codeEditor'), content => {
 const messageInput = $('#messageInput');
 const welcomeTemplate = $('.welcome').cloneNode(true);
 let settingsStatus = { configured: false, model: '', keySource: 'none' };
+const agents = [];
+let activeAgentId = null;
+let nextAgentNumber = 1;
+
+function activeAgent() { return agents.find(agent => agent.id === activeAgentId); }
+
+function renderAgentTabs() {
+  const tabs = $('#agentTabs');
+  tabs.replaceChildren();
+  for (const agent of agents) {
+    const wrapper = document.createElement('div');
+    wrapper.className = `agent-tab-wrap${agent.id === activeAgentId ? ' selected' : ''}${agent.busy ? ' busy' : ''}${agent.unread ? ' unread' : ''}`;
+    const tab = document.createElement('button');
+    tab.type = 'button';
+    tab.className = 'agent-tab';
+    tab.id = `agent-tab-${agent.id}`;
+    tab.setAttribute('role', 'tab');
+    tab.setAttribute('aria-selected', String(agent.id === activeAgentId));
+    tab.setAttribute('aria-controls', agent.view.id);
+    tab.setAttribute('aria-label', `${agent.name}${agent.busy ? ' 処理中' : agent.unread ? ' 新しい回答' : ''}`);
+    tab.title = agent.name;
+    const status = document.createElement('span');
+    status.className = 'agent-tab-status';
+    status.setAttribute('aria-hidden', 'true');
+    const name = document.createElement('span');
+    name.className = 'agent-tab-name';
+    name.textContent = agent.name;
+    tab.append(status, name);
+    tab.addEventListener('click', () => selectAgent(agent.id));
+    tab.addEventListener('keydown', event => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const index = agents.indexOf(agent);
+      const nextIndex = event.key === 'Home' ? 0 : event.key === 'End' ? agents.length - 1
+        : (index + (event.key === 'ArrowRight' ? 1 : -1) + agents.length) % agents.length;
+      selectAgent(agents[nextIndex].id);
+      document.getElementById(`agent-tab-${agents[nextIndex].id}`).focus();
+    });
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'agent-close';
+    close.textContent = '×';
+    close.title = `${agent.name} を閉じる`;
+    close.setAttribute('aria-label', close.title);
+    close.disabled = agents.length === 1 || agent.busy;
+    close.addEventListener('click', () => closeAgent(agent.id));
+    wrapper.append(tab, close);
+    tabs.append(wrapper);
+  }
+  $('#newAgentButton').disabled = agents.length >= 8;
+  $('#newAgentButton').title = agents.length >= 8 ? 'エージェントは最大8つです' : 'エージェントを追加';
+}
+
+function selectAgent(id) {
+  const next = agents.find(agent => agent.id === id);
+  if (!next) return;
+  const previous = activeAgent();
+  if (previous) {
+    previous.draft = messageInput.value;
+    previous.scrollTop = $('#conversation').scrollTop;
+    if (previous !== next && voice.suppressed && 'speechSynthesis' in window) {
+      ++voice.playbackId;
+      speechSynthesis.cancel();
+      releaseVoiceAfterSpeech(voice.playbackId);
+    }
+  }
+  activeAgentId = id;
+  for (const agent of agents) agent.view.hidden = agent !== next;
+  const hadUnread = next.unread;
+  next.unread = false;
+  messageInput.value = next.draft;
+  $('#conversation').scrollTop = hadUnread ? $('#conversation').scrollHeight : next.scrollTop;
+  renderAgentTabs();
+  updateSendButton();
+  updateVoiceDisplay();
+}
+
+function createAgent() {
+  if (agents.length >= 8) return;
+  const number = nextAgentNumber++;
+  const view = document.createElement('div');
+  view.className = 'agent-thread';
+  view.id = `agent-thread-${number}`;
+  view.setAttribute('role', 'tabpanel');
+  view.setAttribute('aria-labelledby', `agent-tab-${number}`);
+  view.append(welcomeTemplate.cloneNode(true));
+  view.hidden = true;
+  $('#conversation').append(view);
+  const agent = { id: number, name: `エージェント ${number}`, view, messages: [], draft: '', scrollTop: 0, busy: false, unread: false };
+  agents.push(agent);
+  selectAgent(agent.id);
+  messageInput.focus();
+}
+
+function closeAgent(id) {
+  const agent = agents.find(item => item.id === id);
+  if (!agent || agent.busy || agents.length === 1) return;
+  if ((agent.messages.length || agent.draft.trim()) && !confirm(`${agent.name} の会話を閉じますか？`)) return;
+  if (activeAgentId === id && (voice.enabled || voice.starting)) stopVoiceListening();
+  const index = agents.indexOf(agent);
+  agents.splice(index, 1);
+  agent.view.remove();
+  if (activeAgentId === id) {
+    activeAgentId = null;
+    selectAgent(agents[Math.max(0, index - 1)].id);
+  } else renderAgentTabs();
+}
+
+function resetAgents() {
+  agents.length = 0;
+  activeAgentId = null;
+  messageInput.value = '';
+  $('#conversation').replaceChildren();
+  createAgent();
+}
 
 const panelLayout = $('#workspaceLayout');
 const panelDivider = $('#panelDivider');
@@ -524,6 +639,10 @@ function openWorkspaceDialog() {
 }
 
 async function switchWorkspace(options) {
+  if (agents.some(agent => agent.busy)) {
+    showError('エージェントの回答が終わってから作業フォルダを切り替えてください。');
+    return;
+  }
   const controls = [$('#chooseWorkspaceButton'), $('#chooseEntryLocationButton'), $('#browseWorkspaceButton'), $('#openWorkspaceButton'), $('#cancelWorkspaceButton')];
   if (controls[0].disabled) return;
   controls.forEach(control => { control.disabled = true; });
@@ -537,8 +656,8 @@ async function switchWorkspace(options) {
     state.open.clear();
     state.saving.clear();
     state.selected = '';
-    state.messages = [];
-    $('#conversation').replaceChildren(welcomeTemplate.cloneNode(true));
+    if (voice.enabled || voice.starting) stopVoiceListening();
+    resetAgents();
     setWorkspaceInfo(result.projectName, result.projectPath);
     const data = await api('/api/tree');
     state.tree = data.tree;
@@ -563,8 +682,8 @@ async function switchWorkspace(options) {
   } finally { controls.forEach(control => { control.disabled = false; }); }
 }
 
-function addMessage(role, content, isError = false) {
-  const welcome = $('.welcome');
+function addMessage(role, content, isError = false, agent = activeAgent()) {
+  const welcome = agent.view.querySelector('.welcome');
   if (welcome) welcome.remove();
   const message = document.createElement('div');
   message.className = `message ${role}${isError ? ' error' : ''}`;
@@ -576,8 +695,8 @@ function addMessage(role, content, isError = false) {
   if (role === 'assistant' && !isError) appendLinkedText(body, content);
   else body.textContent = content;
   message.append(label, body);
-  $('#conversation').append(message);
-  $('#conversation').scrollTop = $('#conversation').scrollHeight;
+  agent.view.append(message);
+  if (agent === activeAgent()) $('#conversation').scrollTop = $('#conversation').scrollHeight;
   return message;
 }
 
@@ -601,7 +720,7 @@ function appendLinkedText(target, content) {
   target.append(document.createTextNode(content.slice(offset)));
 }
 
-function showError(message) { addMessage('assistant', message, true); }
+function showError(message, agent = activeAgent()) { addMessage('assistant', message, true, agent); }
 
 function renderWebSources(message, sources) {
   if (!Array.isArray(sources) || !sources.length) return;
@@ -724,10 +843,10 @@ async function removeSavedApiKey() {
   finally { settingsBusy(false); }
 }
 
-function setBusy(busy) {
-  state.busy = busy;
+function updateSendButton() {
+  const busy = activeAgent()?.busy || false;
   $('#sendButton').disabled = busy;
-  $('#sendButton').title = busy ? '回答を待っています' : '送信';
+  $('#sendButton').title = busy ? 'このエージェントの回答を待っています' : '送信';
 }
 
 function updateWebSearchButton() {
@@ -759,7 +878,8 @@ function speak(text) {
   speechSynthesis.speak(utterance);
 }
 
-function renderProposal(files) {
+function renderProposal(files, agent, workspacePath, baseVersions, existingAtRequest) {
+  const versionAtRequest = path => Object.hasOwn(baseVersions, path) ? baseVersions[path] : undefined;
   const proposal = document.createElement('div');
   proposal.className = 'proposal';
   const title = document.createElement('div');
@@ -790,55 +910,90 @@ function renderProposal(files) {
   apply.className = 'apply-button';
   apply.textContent = '変更を適用する';
   apply.addEventListener('click', async () => {
+    if (state.projectPath !== workspacePath) {
+      showError('作業フォルダが切り替わっています。この変更案は元のフォルダで確認してください。', agent);
+      return;
+    }
     const conflicts = files.filter(file => state.open.has(file.path) && state.open.get(file.path).content !== state.open.get(file.path).saved);
     if (conflicts.length && !confirm(`未保存の変更があるファイル（${conflicts.map(file => file.path).join('、')}）を上書きします。続けますか？`)) return;
     apply.disabled = true;
     apply.textContent = '適用中…';
     try {
       for (const file of files) {
-        const existing = state.files.includes(file.path);
-        const saved = await api('/api/file', jsonOptions('PUT', { ...file, create: !existing, expectedVersion: state.open.get(file.path)?.version }));
+        const version = versionAtRequest(file.path);
+        if (!version) continue;
+        const current = await api(`/api/file?path=${encodeURIComponent(file.path)}`);
+        if (current.version !== version) throw new Error(`${file.path} は依頼後に変更されています。内容を確認してから再依頼してください。`);
+      }
+      for (const file of files) {
+        const saved = await api('/api/file', jsonOptions('PUT', { ...file, create: !existingAtRequest.has(file.path), expectedVersion: versionAtRequest(file.path) || state.open.get(file.path)?.version }));
         state.open.set(file.path, { content: file.content, saved: file.content, version: saved.version });
         expandParents(file.path);
       }
       await refreshTree();
-      await openFile(files[0].path);
+      if (agent === activeAgent()) await openFile(files[0].path);
       apply.textContent = '適用しました ✓';
-      addMessage('assistant', '変更を適用しました。コードとプレビューを確認してください。');
+      addMessage('assistant', '変更を適用しました。コードとプレビューを確認してください。', false, agent);
+      if (agent !== activeAgent()) { agent.unread = true; renderAgentTabs(); }
       if (state.preview) refreshPreview();
     } catch (error) {
       apply.disabled = false;
       apply.textContent = '変更を適用する';
-      showError(error.message);
+      showError(error.message, agent);
+      if (agent !== activeAgent()) { agent.unread = true; renderAgentTabs(); }
     }
   });
   proposal.append(apply);
-  $('#conversation').append(proposal);
-  $('#conversation').scrollTop = $('#conversation').scrollHeight;
+  agent.view.append(proposal);
+  if (agent === activeAgent()) $('#conversation').scrollTop = $('#conversation').scrollHeight;
 }
 
-async function sendMessage(value = messageInput.value, preserveInput = false) {
+async function sendMessage(value, preserveInput = false, agent = activeAgent()) {
+  if (!agent) return;
+  if (value === undefined) value = agent.draft;
   const text = value.trim();
-  if (!text || state.busy) return;
-  if (!preserveInput) messageInput.value = '';
+  if (!text || agent.busy) return;
+  if (!preserveInput) {
+    agent.draft = '';
+    if (agent === activeAgent()) messageInput.value = '';
+  }
   voice.draftNotice = false;
   updateVoiceDisplay();
-  addMessage('user', text);
-  const history = state.messages.slice(-8);
-  state.messages.push({ role: 'user', content: text });
-  setBusy(true);
-  const pending = addMessage('assistant', '考えています…');
+  if (!agent.messages.length) {
+    agent.name = `#${agent.id} ${text.replace(/\s+/g, ' ').slice(0, 16)}`;
+  }
+  addMessage('user', text, false, agent);
+  const history = agent.messages.slice(-8);
+  agent.messages.push({ role: 'user', content: text });
+  agent.busy = true;
+  updateSendButton();
+  renderAgentTabs();
+  const pending = addMessage('assistant', '考えています…', false, agent);
+  const activeFile = state.active;
+  const activeContent = state.open.get(activeFile)?.content;
+  const workspacePath = state.projectPath;
+  const baseVersions = Object.fromEntries([...state.open].map(([path, file]) => [path, file.version]));
+  const existingAtRequest = new Set(state.files);
   try {
-    const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile: state.active, activeContent: state.open.get(state.active)?.content, history, webSearch: state.webSearch }));
+    const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile, activeContent, history, webSearch: state.webSearch }));
     pending.remove();
-    const answer = addMessage('assistant', result.reply || '回答がありませんでした。');
+    const answer = addMessage('assistant', result.reply || '回答がありませんでした。', false, agent);
     answer.querySelector('.message-label').textContent = `Vocode · ${result.files?.length ? '変更案' : '回答'}${result.webSearchUsed ? ' · Web検索' : ''}`;
     renderWebSources(answer, result.sources);
-    state.messages.push({ role: 'assistant', content: result.reply || '' });
-    if (result.files?.length) renderProposal(result.files);
-    speak(result.reply || '');
-  } catch (error) { pending.remove(); showError(error.message); }
-  finally { setBusy(false); if (!preserveInput) messageInput.focus(); }
+    agent.messages.push({ role: 'assistant', content: result.reply || '' });
+    if (result.files?.length) renderProposal(result.files, agent, workspacePath, { ...baseVersions, ...result.baseVersions }, existingAtRequest);
+    if (agent === activeAgent()) speak(result.reply || '');
+    else agent.unread = true;
+  } catch (error) {
+    pending.remove();
+    showError(error.message, agent);
+    if (agent !== activeAgent()) agent.unread = true;
+  } finally {
+    agent.busy = false;
+    updateSendButton();
+    renderAgentTabs();
+    if (!preserveInput && agent === activeAgent()) messageInput.focus();
+  }
 }
 
 function refreshPreview() {
@@ -887,6 +1042,7 @@ function stopVoiceListening() {
   voice.starting = false;
   voice.queue = [];
   voice.draftNotice = false;
+  voice.recordingAgentId = null;
   voice.abort?.abort();
   voice.abort = null;
   voice.node?.disconnect();
@@ -899,11 +1055,11 @@ function stopVoiceListening() {
   updateVoiceDisplay();
 }
 
-async function waitUntilReady(generation) {
-  while (voice.enabled && voice.generation === generation && state.busy) {
+async function waitUntilReady(generation, agent) {
+  while (voice.enabled && voice.generation === generation && agent.busy) {
     await new Promise(resolve => setTimeout(resolve, 150));
   }
-  return voice.enabled && voice.generation === generation;
+  return voice.enabled && voice.generation === generation && agents.includes(agent);
 }
 
 async function processVoiceQueue() {
@@ -912,8 +1068,10 @@ async function processVoiceQueue() {
   const generation = voice.generation;
   try {
     while (voice.enabled && voice.generation === generation && voice.queue.length) {
-      const blob = voice.queue.shift();
-      const pending = addMessage('assistant', '音声を文字にしています…');
+      const { blob, agentId } = voice.queue.shift();
+      const agent = agents.find(item => item.id === agentId);
+      if (!agent) continue;
+      const pending = addMessage('assistant', '音声を文字にしています…', false, agent);
       const abort = new AbortController();
       voice.abort = abort;
       updateVoiceDisplay();
@@ -923,18 +1081,27 @@ async function processVoiceQueue() {
         if (!response.ok) throw new Error(data.error || '音声を文字にできませんでした。');
         pending.remove();
         if (!voice.enabled || voice.generation !== generation) break;
-        const { draft, send } = updateVoiceDraft(messageInput.value, data.text);
-        if (draft !== messageInput.value) {
-          messageInput.value = draft;
-          messageInput.scrollTop = messageInput.scrollHeight;
+        const { draft, send } = updateVoiceDraft(agent.draft, data.text);
+        if (draft !== agent.draft) {
+          agent.draft = draft;
+          if (agent === activeAgent()) {
+            messageInput.value = draft;
+            messageInput.scrollTop = messageInput.scrollHeight;
+          } else {
+            agent.unread = true;
+            renderAgentTabs();
+          }
           voice.draftNotice = true;
         }
         if (send) {
-          if (!messageInput.value.trim()) showToast('送る内容がありません。先に話してください。');
-          else if (await waitUntilReady(generation)) await sendMessage();
+          if (!agent.draft.trim()) showToast('送る内容がありません。先に話してください。');
+          else if (await waitUntilReady(generation, agent)) sendMessage(undefined, false, agent);
         }
       } catch (error) {
-        if (error.name !== 'AbortError' && voice.enabled && voice.generation === generation) showError(error.message);
+        if (error.name !== 'AbortError' && voice.enabled && voice.generation === generation) {
+          showError(error.message, agent);
+          if (agent !== activeAgent()) { agent.unread = true; renderAgentTabs(); }
+        }
       } finally {
         pending.remove();
         if (voice.abort === abort) voice.abort = null;
@@ -951,14 +1118,16 @@ function receiveVoiceSamples(samples) {
   if (!voice.enabled || !voice.segmenter) return;
   if (voice.suppressed || Date.now() < voice.mutedUntil) {
     voice.segmenter.reset();
+    voice.recordingAgentId = null;
     return;
   }
   const result = voice.segmenter.push(samples);
-  if (result.started) { voice.draftNotice = false; updateVoiceDisplay(); }
+  if (result.started) { voice.recordingAgentId = activeAgentId; voice.draftNotice = false; updateVoiceDisplay(); }
   if (voice.segmenter.active) $('#recordingTime').textContent = `${Math.floor(voice.segmenter.recordedSamples / voice.segmenter.sampleRate)}秒`;
   if (result.audio) {
-    if (voice.queue.length < 4) voice.queue.push(wavBlob(result.audio, voice.segmenter.sampleRate));
+    if (voice.queue.length < 4) voice.queue.push({ blob: wavBlob(result.audio, voice.segmenter.sampleRate), agentId: voice.recordingAgentId || activeAgentId });
     else showError('音声がたまっています。回答が終わるまで少しお待ちください。');
+    voice.recordingAgentId = null;
     updateVoiceDisplay();
     processVoiceQueue();
   }
@@ -1037,14 +1206,16 @@ if (!window.showDirectoryPicker) {
   $('#saveFolderButton small').textContent = 'このブラウザでは利用できません。ZIP を選んでください。';
 }
 $('#refreshPreviewButton').addEventListener('click', refreshPreview);
-$('#sendButton').addEventListener('click', () => sendMessage());
+$('#sendButton').addEventListener('click', () => sendMessage(messageInput.value));
+$('#newAgentButton').addEventListener('click', createAgent);
 $('#webSearchButton').addEventListener('click', () => {
   state.webSearch = !state.webSearch;
   localStorage.setItem('vocode-web-search', state.webSearch ? 'auto' : 'off');
   updateWebSearchButton();
 });
 updateWebSearchButton();
-messageInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(); } });
+messageInput.addEventListener('input', () => { activeAgent().draft = messageInput.value; });
+messageInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(messageInput.value); } });
 $('#micButton').addEventListener('click', toggleVoiceListening);
 $('#speakButton').addEventListener('click', () => {
   state.speaking = !state.speaking;
@@ -1124,8 +1295,11 @@ $('#conversation').addEventListener('click', event => {
   const button = event.target.closest('[data-suggestion]');
   if (!button) return;
   messageInput.value = button.dataset.suggestion;
+  activeAgent().draft = messageInput.value;
   messageInput.focus();
 });
+
+resetAgents();
 
 try {
   const [status, data] = await Promise.all([api('/api/status'), api('/api/tree')]);

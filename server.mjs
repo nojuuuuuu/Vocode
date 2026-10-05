@@ -77,21 +77,24 @@ async function openaiResponse(payload) {
   return data;
 }
 
-async function projectContext(activeFile) {
+async function projectContext(project, activeFile) {
   const files = await project.files();
   let budget = 70_000;
   const selected = [...files].sort((a, b) => Number(b === activeFile) - Number(a === activeFile));
   const contents = [];
+  const versions = Object.create(null);
   for (const name of selected) {
     const { stat } = await project.existing(name, 'file');
     if (stat.size > 32_000 || stat.size > budget) continue;
     let content;
-    try { content = (await project.read(name)).content; }
+    let fileVersion;
+    try { ({ content, version: fileVersion } = await project.read(name)); }
     catch (error) { if (error.status === 415) continue; throw error; }
     budget -= Buffer.byteLength(content);
     contents.push({ path: name, content });
+    versions[name] = fileVersion;
   }
-  return { files, contents };
+  return { files, contents, versions };
 }
 
 async function assistant(req, res) {
@@ -100,12 +103,17 @@ async function assistant(req, res) {
   if (!message) throw httpError(400, '質問か依頼を入力してください。');
   const webSearchEnabled = body.webSearch !== false;
   const activeFile = body.activeFile ? validatePath(body.activeFile) : '';
-  const context = await projectContext(activeFile);
+  const requestProject = project;
+  const context = await projectContext(requestProject, activeFile);
   if (activeFile && typeof body.activeContent === 'string') {
     if (Buffer.byteLength(body.activeContent) > 50_000) throw httpError(413, 'AI に渡すには編集中のファイルが大きすぎます。');
     const active = context.contents.find(file => file.path === activeFile);
     if (active) active.content = body.activeContent;
-    else context.contents.unshift({ path: activeFile, content: body.activeContent });
+    else {
+      context.contents.unshift({ path: activeFile, content: body.activeContent });
+      try { context.versions[activeFile] = (await requestProject.read(activeFile)).version; }
+      catch (error) { if (![413, 415].includes(error.status)) throw error; }
+    }
   }
   let contextBytes = 0;
   context.contents = context.contents.filter(file => {
@@ -124,7 +132,7 @@ async function assistant(req, res) {
     instructions,
     input: [
       ...history,
-      { role: 'user', content: JSON.stringify({ request: message, activeFile, project: context }) }
+      { role: 'user', content: JSON.stringify({ request: message, activeFile, project: { files: context.files, contents: context.contents } }) }
     ],
     text: {
       format: {
@@ -152,7 +160,12 @@ async function assistant(req, res) {
   let result;
   try { result = JSON.parse(outputText(response)); }
   catch { throw httpError(502, 'AI の応答を読み取れませんでした。もう一度お試しください。'); }
-  send(res, 200, { ...normalizeAssistantResult(result, maxFileBytes), ...webSearchReferences(response) });
+  const normalized = normalizeAssistantResult(result, maxFileBytes);
+  const includedPaths = new Set(context.contents.map(file => file.path));
+  const baseVersions = Object.fromEntries(normalized.files
+    .filter(file => includedPaths.has(file.path) && context.versions[file.path])
+    .map(file => [file.path, context.versions[file.path]]));
+  send(res, 200, { ...normalized, baseVersions, ...webSearchReferences(response) });
 }
 
 async function transcribe(req, res) {
