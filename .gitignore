@@ -3,5 +3,6 @@
 .vocode-api-settings.json
 node_modules/
 public/editor-bundle.js
+public/markdown-bundle.js
 **/.vocode-trash/
 .DS_Store

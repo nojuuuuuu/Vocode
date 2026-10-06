@@ -1,5 +1,6 @@
 import { writeProjectToDirectory } from './local-save.js';
 import { createCodeEditor } from './editor-bundle.js';
+import { renderMarkdown } from './markdown-bundle.js';
 import { VoiceSegmenter, updateVoiceDraft, wavBlob } from './voice-activity.js';
 
 const $ = selector => document.querySelector(selector);
@@ -692,32 +693,12 @@ function addMessage(role, content, isError = false, agent = activeAgent()) {
   label.textContent = role === 'user' ? 'あなた' : 'Vocode';
   const body = document.createElement('div');
   body.className = 'message-body';
-  if (role === 'assistant' && !isError) appendLinkedText(body, content);
+  if (role === 'assistant' && !isError) body.innerHTML = renderMarkdown(content);
   else body.textContent = content;
   message.append(label, body);
   agent.view.append(message);
   if (agent === activeAgent()) $('#conversation').scrollTop = $('#conversation').scrollHeight;
   return message;
-}
-
-function appendLinkedText(target, content) {
-  const markdownLink = /\[([^\]\n]{1,160})\]\((https?:\/\/[^\s)]+)\)/g;
-  let offset = 0;
-  for (const match of content.matchAll(markdownLink)) {
-    target.append(document.createTextNode(content.slice(offset, match.index)));
-    try {
-      const url = new URL(match[2]);
-      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid link');
-      const link = document.createElement('a');
-      link.href = url.href;
-      link.target = '_blank';
-      link.rel = 'noopener noreferrer';
-      link.textContent = match[1];
-      target.append(link);
-    } catch { target.append(document.createTextNode(match[0])); }
-    offset = match.index + match[0].length;
-  }
-  target.append(document.createTextNode(content.slice(offset)));
 }
 
 function showError(message, agent = activeAgent()) { addMessage('assistant', message, true, agent); }
