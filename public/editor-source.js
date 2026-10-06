@@ -52,6 +52,8 @@ export function createCodeEditor(parent, onChange, onCursor) {
         selection: { anchor: 0 },
         effects: EditorView.scrollIntoView(0, { y: 'start' })
       });
+      view.scrollDOM.scrollTop = 0;
+      view.scrollDOM.scrollLeft = 0;
       replacing = false;
     },
     setEnabled(enabled) {

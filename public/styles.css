@@ -43,3 +43,12 @@
 .message.assistant .message-body blockquote{padding:2px 0 2px 10px;border-left:3px solid #6da987;color:#b5c8c4}
 .message.assistant .message-body table{display:block;max-width:100%;overflow-x:auto;border-collapse:collapse}.message.assistant .message-body th,.message.assistant .message-body td{padding:5px 7px;border:1px solid #40515b}.message.assistant .message-body th{background:#263943}
 .message.assistant .message-body hr{border:0;border-top:1px solid #40515b;margin:14px 0}
+
+/* Keep the editor and conversation inside separate viewport-sized scroll regions. */
+.app-shell{height:100dvh;min-height:0;overflow:hidden}
+.workspace-layout{grid-template-rows:minmax(0,1fr);overflow:hidden}
+.main-panel{min-height:0;overflow:hidden}
+.editor-area,.code-editor,.code-editor .cm-editor{min-height:0}
+.code-editor .cm-editor{height:100%}
+.code-editor .cm-scroller{overflow:auto;overscroll-behavior:contain}
+.conversation{overscroll-behavior:contain}
