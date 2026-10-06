@@ -8,7 +8,14 @@ test('questions cannot expose file changes, while implementation requests retain
 
   const edit = normalizeAssistantResult({ action: 'edit', reply: '変更案です。', files: [{ path: 'src/app.js', content: 'new code' }] }, 1000);
   assert.deepEqual(edit, { action: 'edit', reply: '変更案です。', files: [{ path: 'src/app.js', content: 'new code' }] });
-  assert.throws(() => normalizeAssistantResult({ action: 'edit', reply: '', files: [{ path: '../outside', content: 'bad' }] }, 1000));
+  const protectedOnly = normalizeAssistantResult({ action: 'edit', reply: '設定します。', files: [{ path: '.env', content: 'SECRET=example' }] }, 1000);
+  assert.equal(protectedOnly.action, 'answer');
+  assert.deepEqual(protectedOnly.files, []);
+  assert.match(protectedOnly.reply, /保護された場所/);
+  const partial = normalizeAssistantResult({ action: 'edit', reply: '設定します。', files: [
+    { path: '../outside', content: 'bad' }, { path: 'src/db.js', content: 'safe' }
+  ] }, 1000);
+  assert.deepEqual(partial.files, [{ path: 'src/db.js', content: 'safe' }]);
   assert.throws(() => normalizeAssistantResult({ action: 'edit', reply: '', files: [{ path: 'app.js', content: 'too large' }] }, 5), { status: 413 });
   assert.throws(() => normalizeAssistantResult({ action: 'unknown', reply: '', files: [] }, 1000), { status: 502 });
 });
