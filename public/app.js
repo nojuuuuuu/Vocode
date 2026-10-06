@@ -298,10 +298,19 @@ let terminalController = null;
 function updateTerminalStatus(status, cwd) {
   const labels = { connecting: '接続中…', ready: '実行中', exited: '終了', error: 'エラー', disconnected: '未接続' };
   $('#terminalStatus').textContent = labels[status] || status;
+  $('#terminalAiButton').disabled = status !== 'ready';
+  if (status !== 'ready') setTerminalAiSharing(false);
   if (cwd) {
     $('#terminalPath').textContent = cwd;
     $('#terminalPath').title = cwd;
   }
+}
+
+function setTerminalAiSharing(enabled) {
+  const button = $('#terminalAiButton');
+  button.setAttribute('aria-pressed', String(enabled));
+  button.textContent = enabled ? 'AI共有中' : 'AIに共有';
+  button.title = enabled ? 'AIへのターミナル共有を停止' : 'このターミナルの出力とコマンド実行をAIに共有';
 }
 
 function applyTerminalHeight() {
@@ -334,7 +343,12 @@ async function showTerminal() {
   }
 }
 
-function hideTerminal() {
+async function hideTerminal() {
+  if ($('#terminalAiButton').getAttribute('aria-pressed') === 'true') {
+    const acknowledged = await terminalController?.setAiSharing(false);
+    if (acknowledged !== false) terminalController?.disconnect();
+  }
+  setTerminalAiSharing(false);
   terminalPanel.hidden = true;
   terminalDivider.hidden = true;
   $('#terminalToggleButton').classList.remove('selected');
@@ -342,6 +356,19 @@ function hideTerminal() {
 }
 
 $('#terminalToggleButton').addEventListener('click', () => terminalPanel.hidden ? showTerminal() : hideTerminal());
+$('#terminalAiButton').addEventListener('click', async () => {
+  if (!terminalController?.getSessionId()) return;
+  const button = $('#terminalAiButton');
+  const enabled = button.getAttribute('aria-pressed') !== 'true';
+  button.disabled = true;
+  const acknowledged = await terminalController.setAiSharing(enabled);
+  if (acknowledged === enabled) setTerminalAiSharing(enabled);
+  else if (!enabled) {
+    terminalController.disconnect();
+    setTerminalAiSharing(false);
+  } else showToast('ターミナルをAIに共有できませんでした。', true);
+  button.disabled = !terminalController.getSessionId();
+});
 $('#terminalCloseButton').addEventListener('click', hideTerminal);
 $('#terminalRestartButton').addEventListener('click', () => terminalController?.restart());
 document.addEventListener('keydown', event => {
@@ -1157,7 +1184,8 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
   const existingAtRequest = new Set(state.files);
   try {
     await persistConversations();
-    const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile, activeContent, history, webSearch: state.webSearch }));
+    const terminalSessionId = $('#terminalAiButton').getAttribute('aria-pressed') === 'true' ? terminalController?.getSessionId() : null;
+    const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile, activeContent, history, webSearch: state.webSearch, terminalSessionId }));
     const duration = formatElapsedTime(performance.now() - sentAt);
     pending.remove();
     addMessage('assistant', result.reply || '回答がありませんでした。', false, agent, {

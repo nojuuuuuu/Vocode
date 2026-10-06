@@ -67,6 +67,7 @@
 .terminal-path{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7e929c;font-size:10px;text-align:right}
 .terminal-header button{width:23px;height:23px;flex:none;border:0;border-radius:4px;background:transparent;color:#9badb1;font-size:17px;line-height:1}
 .terminal-header button:hover{background:#2d4144;color:#e6f4ed}
+.terminal-header .terminal-ai-button{width:auto;padding:0 8px;border:1px solid #466253;font-size:10px;white-space:nowrap}.terminal-header .terminal-ai-button[aria-pressed="true"]{background:#29543e;color:#b9f3d0;border-color:#62ad81}.terminal-header .terminal-ai-button:disabled{opacity:.45;cursor:default}
 .terminal-surface{flex:1;min-height:0;overflow:hidden;padding:5px 8px 8px}
 .terminal-surface .xterm{height:100%}
 .resizing-terminal,.resizing-terminal *{cursor:row-resize!important;user-select:none!important}

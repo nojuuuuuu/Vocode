@@ -54,7 +54,9 @@ test('terminal WebSocket uses the workspace, forwards input and resize, and reje
     connection.on('message', onMessage);
   });
   await once(connection, 'open');
-  assert.equal((await waitForMessage('ready')).cwd, '/tmp/vocode-terminal-project');
+  const ready = await waitForMessage('ready');
+  assert.equal(ready.cwd, '/tmp/vocode-terminal-project');
+  assert.match(ready.sessionId, /^[0-9a-f-]{36}$/);
   assert.equal(processes[0].options.cwd, '/tmp/vocode-terminal-project');
 
   connection.send(JSON.stringify({ type: 'input', data: 'pwd\r' }));
@@ -64,8 +66,28 @@ test('terminal WebSocket uses the workspace, forwards input and resize, and reje
   assert.deepEqual(processes[0].sizes, [[100, 30]]);
   assert.ok(messages.some(message => message.type === 'output' && message.data === 'echo:pwd\r'));
 
+  assert.equal(terminalServer.readSession(ready.sessionId), null);
+  assert.match((await terminalServer.inputSession(ready.sessionId, 'ls')).error, /接続/);
+  connection.send(JSON.stringify({ type: 'sharing', enabled: true, requestId: 'enable' }));
+  assert.deepEqual(await waitForMessage('sharing'), { type: 'sharing', enabled: true, requestId: 'enable' });
+  const result = await terminalServer.inputSession(ready.sessionId, 'ls');
+  assert.deepEqual(processes[0].input, ['pwd\r', 'ls\r']);
+  assert.match(result.output, /echo:ls/);
+  assert.match(terminalServer.readSession(ready.sessionId), /echo:ls/);
+  assert.match((await terminalServer.inputSession(ready.sessionId, 'bad\ncommand')).error, /1行/);
+  const disabled = new Promise(resolve => connection.on('message', function onMessage(raw) {
+    const message = JSON.parse(raw.toString());
+    if (message.type !== 'sharing' || message.enabled !== false) return;
+    connection.off('message', onMessage);
+    resolve(message);
+  }));
+  connection.send(JSON.stringify({ type: 'sharing', enabled: false, requestId: 'disable' }));
+  assert.deepEqual(await disabled, { type: 'sharing', enabled: false, requestId: 'disable' });
+  assert.equal(terminalServer.readSession(ready.sessionId), null);
+
   connection.close();
   await once(connection, 'close');
   await processes[0].killedPromise;
   assert.equal(processes[0].killed, true);
+  assert.equal(terminalServer.readSession(ready.sessionId), null);
 });

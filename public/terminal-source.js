@@ -18,6 +18,14 @@ export function createWorkspaceTerminal(parent, onState) {
   terminal.open(parent);
   let socket = null;
   let exited = false;
+  let sessionId = null;
+  let nextShareRequest = 0;
+  const sharingRequests = new Map();
+
+  function resolveSharingRequests() {
+    for (const resolve of sharingRequests.values()) resolve(null);
+    sharingRequests.clear();
+  }
 
   function send(message) {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -47,6 +55,7 @@ export function createWorkspaceTerminal(parent, onState) {
     terminal.writeln('シェルに接続しています…');
     onState('connecting');
     exited = false;
+    sessionId = null;
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const connection = new WebSocket(`${protocol}//${location.host}/api/terminal`);
     socket = connection;
@@ -62,6 +71,7 @@ export function createWorkspaceTerminal(parent, onState) {
       catch { return; }
       if (message.type === 'output') terminal.write(message.data);
       else if (message.type === 'ready') {
+        sessionId = message.sessionId;
         onState('ready', message.cwd);
         fit();
       } else if (message.type === 'exit') {
@@ -72,11 +82,19 @@ export function createWorkspaceTerminal(parent, onState) {
         exited = true;
         terminal.writeln(`\r\n[${message.message}]`);
         onState('error');
+      } else if (message.type === 'sharing') {
+        const resolve = sharingRequests.get(message.requestId);
+        if (resolve) {
+          sharingRequests.delete(message.requestId);
+          resolve(message.enabled);
+        }
       }
     });
     connection.addEventListener('close', () => {
       if (socket !== connection) return;
       socket = null;
+      sessionId = null;
+      resolveSharingRequests();
       if (!exited) onState('disconnected');
     });
     connection.addEventListener('error', () => {
@@ -87,6 +105,8 @@ export function createWorkspaceTerminal(parent, onState) {
   function disconnect() {
     const connection = socket;
     socket = null;
+    sessionId = null;
+    resolveSharingRequests();
     if (connection && [WebSocket.CONNECTING, WebSocket.OPEN].includes(connection.readyState)) connection.close();
     onState('disconnected');
   }
@@ -96,6 +116,16 @@ export function createWorkspaceTerminal(parent, onState) {
     disconnect,
     restart() { disconnect(); connect(); },
     fit,
+    getSessionId() { return socket?.readyState === WebSocket.OPEN ? sessionId : null; },
+    setAiSharing(enabled) {
+      if (!this.getSessionId()) return Promise.resolve(null);
+      const requestId = String(++nextShareRequest);
+      return new Promise(resolve => {
+        const timeout = setTimeout(() => { sharingRequests.delete(requestId); resolve(null); }, 2000);
+        sharingRequests.set(requestId, value => { clearTimeout(timeout); resolve(value); });
+        send({ type: 'sharing', enabled, requestId });
+      });
+    },
     focus() { terminal.focus(); },
     clear() { terminal.clear(); },
     dispose() { disconnect(); resizeObserver.disconnect(); input.dispose(); terminal.dispose(); }

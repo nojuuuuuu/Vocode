@@ -55,7 +55,7 @@
         <div id="previewView" class="preview-view" hidden><div class="preview-toolbar"><span>ライブプレビュー</span><button id="refreshPreviewButton" class="icon-button" title="更新"><svg><use href="#i-refresh"/></svg></button></div><iframe id="previewFrame" title="プロジェクトのプレビュー" sandbox="allow-scripts"></iframe></div>
         <div id="terminalDivider" class="terminal-divider" role="separator" aria-orientation="horizontal" aria-label="コードとターミナルの高さを調整" aria-valuemin="120" tabindex="0" hidden></div>
         <section id="terminalPanel" class="terminal-panel" aria-label="ターミナル" hidden>
-          <div class="terminal-header"><strong>ターミナル</strong><span id="terminalStatus" role="status">未接続</span><span id="terminalPath" class="terminal-path"></span><button id="terminalRestartButton" type="button" title="シェルを再起動" aria-label="シェルを再起動">↻</button><button id="terminalCloseButton" type="button" title="ターミナルを隠す" aria-label="ターミナルを隠す">×</button></div>
+          <div class="terminal-header"><strong>ターミナル</strong><span id="terminalStatus" role="status">未接続</span><button id="terminalAiButton" class="terminal-ai-button" type="button" aria-pressed="false" title="このターミナルの出力とコマンド実行をAIに共有" disabled>AIに共有</button><span id="terminalPath" class="terminal-path"></span><button id="terminalRestartButton" type="button" title="シェルを再起動" aria-label="シェルを再起動">↻</button><button id="terminalCloseButton" type="button" title="ターミナルを隠す" aria-label="ターミナルを隠す">×</button></div>
           <div id="terminalSurface" class="terminal-surface"></div>
         </section>
       </main>
