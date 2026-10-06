@@ -294,6 +294,101 @@ window.addEventListener('resize', () => {
 });
 applyPanelWidth();
 
+const terminalPanel = $('#terminalPanel');
+const terminalDivider = $('#terminalDivider');
+const terminalHeightKey = 'vocode-terminal-height';
+let preferredTerminalHeight = Number(localStorage.getItem(terminalHeightKey)) || 240;
+let terminalController = null;
+
+function updateTerminalStatus(status, cwd) {
+  const labels = { connecting: '接続中…', ready: '実行中', exited: '終了', error: 'エラー', disconnected: '未接続' };
+  $('#terminalStatus').textContent = labels[status] || status;
+  if (cwd) {
+    $('#terminalPath').textContent = cwd;
+    $('#terminalPath').title = cwd;
+  }
+}
+
+function applyTerminalHeight() {
+  const maximum = Math.max(120, $('.main-panel').clientHeight - 150);
+  preferredTerminalHeight = Math.max(120, Math.min(maximum, preferredTerminalHeight));
+  terminalPanel.style.height = `${preferredTerminalHeight}px`;
+  terminalDivider.setAttribute('aria-valuemax', String(maximum));
+  terminalDivider.setAttribute('aria-valuenow', String(preferredTerminalHeight));
+  terminalDivider.setAttribute('aria-valuetext', `ターミナル ${preferredTerminalHeight}px`);
+  terminalController?.fit();
+}
+
+async function showTerminal() {
+  terminalPanel.hidden = false;
+  terminalDivider.hidden = false;
+  $('#terminalToggleButton').classList.add('selected');
+  $('#terminalToggleButton').setAttribute('aria-expanded', 'true');
+  applyTerminalHeight();
+  try {
+    if (!terminalController) {
+      const { createWorkspaceTerminal } = await import('./terminal-bundle.js');
+      if (terminalPanel.hidden) return;
+      if (!terminalController) terminalController = createWorkspaceTerminal($('#terminalSurface'), updateTerminalStatus);
+    }
+    terminalController.connect();
+    requestAnimationFrame(() => terminalController.fit());
+  } catch (error) {
+    updateTerminalStatus('error');
+    showToast(`ターミナルを開けませんでした: ${error.message}`, true);
+  }
+}
+
+function hideTerminal() {
+  terminalPanel.hidden = true;
+  terminalDivider.hidden = true;
+  $('#terminalToggleButton').classList.remove('selected');
+  $('#terminalToggleButton').setAttribute('aria-expanded', 'false');
+}
+
+$('#terminalToggleButton').addEventListener('click', () => terminalPanel.hidden ? showTerminal() : hideTerminal());
+$('#terminalCloseButton').addEventListener('click', hideTerminal);
+$('#terminalRestartButton').addEventListener('click', () => terminalController?.restart());
+document.addEventListener('keydown', event => {
+  if (event.ctrlKey && !event.altKey && !event.metaKey && event.code === 'Backquote') {
+    event.preventDefault();
+    if (terminalPanel.hidden) showTerminal();
+    else hideTerminal();
+  }
+});
+
+let terminalDrag = null;
+terminalDivider.addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  terminalDrag = { id: event.pointerId, y: event.clientY, height: terminalPanel.getBoundingClientRect().height };
+  terminalDivider.setPointerCapture(event.pointerId);
+  document.body.classList.add('resizing-terminal');
+});
+terminalDivider.addEventListener('pointermove', event => {
+  if (!terminalDrag || event.pointerId !== terminalDrag.id) return;
+  preferredTerminalHeight = terminalDrag.height + terminalDrag.y - event.clientY;
+  applyTerminalHeight();
+});
+function finishTerminalDrag(event) {
+  if (!terminalDrag || event.pointerId !== terminalDrag.id) return;
+  terminalDrag = null;
+  document.body.classList.remove('resizing-terminal');
+  localStorage.setItem(terminalHeightKey, String(preferredTerminalHeight));
+}
+terminalDivider.addEventListener('pointerup', finishTerminalDrag);
+terminalDivider.addEventListener('pointercancel', finishTerminalDrag);
+terminalDivider.addEventListener('keydown', event => {
+  if (event.key === 'ArrowUp') preferredTerminalHeight += event.shiftKey ? 50 : 20;
+  else if (event.key === 'ArrowDown') preferredTerminalHeight -= event.shiftKey ? 50 : 20;
+  else if (event.key === 'Home') preferredTerminalHeight = 120;
+  else if (event.key === 'End') preferredTerminalHeight = Number(terminalDivider.getAttribute('aria-valuemax'));
+  else return;
+  event.preventDefault();
+  applyTerminalHeight();
+  localStorage.setItem(terminalHeightKey, String(preferredTerminalHeight));
+});
+window.addEventListener('resize', () => { if (!terminalPanel.hidden) applyTerminalHeight(); });
+
 async function api(url, options = {}) {
   const response = await fetch(url, options);
   const data = await response.json().catch(() => ({}));
@@ -723,6 +818,8 @@ function setWorkspaceInfo(name, location) {
   $('#projectFolderName').textContent = name;
   $('#projectPath').textContent = location;
   $('#projectPath').title = location;
+  $('#terminalPath').textContent = location;
+  $('#terminalPath').title = location;
   $('#chooseWorkspaceButton').title = `作業フォルダを選ぶ（現在: ${location}）`;
   $('.crumb-folder').textContent = name;
 }
@@ -754,6 +851,10 @@ async function switchWorkspace(options) {
     state.selected = '';
     if (voice.enabled || voice.starting) stopVoiceListening();
     setWorkspaceInfo(result.projectName, result.projectPath);
+    if (terminalController) {
+      terminalController.disconnect();
+      if (!terminalPanel.hidden) terminalController.connect();
+    }
     await restoreConversations();
     const data = await api('/api/tree');
     state.tree = data.tree;

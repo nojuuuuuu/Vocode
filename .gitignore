@@ -4,5 +4,7 @@
 node_modules/
 public/editor-bundle.js
 public/markdown-bundle.js
+public/terminal-bundle.js
+public/terminal.css
 **/.vocode-trash/
 .DS_Store

@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#111720">
   <title>Vocode — 声でつくる開発環境</title>
+  <link rel="stylesheet" href="/terminal.css">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
@@ -46,13 +47,18 @@
       </aside>
 
       <main class="main-panel">
-        <div class="editor-topline"><div id="tabs" class="tabs"></div><div class="editor-top-actions"><button id="saveButton" class="subtle-button"><svg><use href="#i-save"/></svg>保存</button><button id="previewButton" class="subtle-button"><svg><use href="#i-play"/></svg>プレビュー</button></div></div>
+        <div class="editor-topline"><div id="tabs" class="tabs"></div><div class="editor-top-actions"><button id="saveButton" class="subtle-button"><svg><use href="#i-save"/></svg>保存</button><button id="previewButton" class="subtle-button"><svg><use href="#i-play"/></svg>プレビュー</button><button id="terminalToggleButton" class="subtle-button" type="button" aria-expanded="false" aria-controls="terminalPanel" title="ターミナルを開く（Ctrl + `）"><span class="terminal-glyph">&gt;_</span>ターミナル</button></div></div>
         <div id="editorView" class="editor-view">
           <div class="breadcrumb"><span class="crumb-folder">workspace</span><span class="slash">/</span><span id="breadcrumbFile">index.html</span><span id="dirtyLabel" class="dirty-label" hidden>未保存</span></div>
           <div class="editor-area"><div id="codeEditor" class="code-editor"></div></div>
           <div class="editor-status"><div><span class="status-live"></span><span id="saveStatus">準備中</span></div><div><span id="cursorPosition">行 1, 列 1</span><span id="languageLabel">HTML</span><span>UTF-8</span></div></div>
         </div>
         <div id="previewView" class="preview-view" hidden><div class="preview-toolbar"><span>ライブプレビュー</span><button id="refreshPreviewButton" class="icon-button" title="更新"><svg><use href="#i-refresh"/></svg></button></div><iframe id="previewFrame" title="プロジェクトのプレビュー" sandbox="allow-scripts"></iframe></div>
+        <div id="terminalDivider" class="terminal-divider" role="separator" aria-orientation="horizontal" aria-label="コードとターミナルの高さを調整" aria-valuemin="120" tabindex="0" hidden></div>
+        <section id="terminalPanel" class="terminal-panel" aria-label="ターミナル" hidden>
+          <div class="terminal-header"><strong>ターミナル</strong><span id="terminalStatus" role="status">未接続</span><span id="terminalPath" class="terminal-path"></span><button id="terminalRestartButton" type="button" title="シェルを再起動" aria-label="シェルを再起動">↻</button><button id="terminalCloseButton" type="button" title="ターミナルを隠す" aria-label="ターミナルを隠す">×</button></div>
+          <div id="terminalSurface" class="terminal-surface"></div>
+        </section>
       </main>
 
       <div id="panelDivider" class="panel-divider" role="separator" aria-orientation="vertical" aria-label="コードとAIの幅を調整" aria-valuemin="260" aria-valuenow="375" tabindex="0" title="ドラッグまたは左右キーで幅を調整。ダブルクリックで元に戻す"></div>

@@ -8,6 +8,7 @@ import { WorkspaceLocation, chooseWorkspaceFolder } from './workspace-location.m
 import { ApiSettings, validKey, openaiModels, checkOpenaiModel } from './api-settings.mjs';
 import { normalizeAssistantResult } from './assistant-intent.mjs';
 import { webSearchReferences } from './web-sources.mjs';
+import { attachTerminalServer } from './terminal-server.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const publicRoot = path.join(root, 'public');
@@ -225,6 +226,7 @@ const server = http.createServer(async (req, res) => {
         const selected = await chooseWorkspaceFolder();
         if (!selected) return send(res, 200, { cancelled: true });
         project = await workspaceLocation.switchTo(selected);
+        terminalServer.closeAll();
         return send(res, 200, { projectName: path.basename(project.root), projectPath: project.root });
       } finally { choosingWorkspace = false; }
     }
@@ -233,6 +235,7 @@ const server = http.createServer(async (req, res) => {
       const body = await readJson(req);
       if (typeof body.path !== 'string' || !path.isAbsolute(body.path.trim())) throw httpError(400, '保存先の絶対パスを入力してください。');
       project = await workspaceLocation.switchTo(body.path.trim());
+      terminalServer.closeAll();
       return send(res, 200, { projectName: path.basename(project.root), projectPath: project.root });
     }
     if (url.pathname === '/api/tree' && req.method === 'GET') return send(res, 200, { tree: await project.tree(), trash: await project.listTrash() });
@@ -278,7 +281,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET') {
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-      if (['index.html', 'app.js', 'conversation-store.js', 'editor-bundle.js', 'markdown-bundle.js', 'local-save.js', 'voice-activity.js', 'voice-capture-processor.js', 'styles.css'].includes(file)) return await serveFile(res, path.join(publicRoot, file));
+      if (['index.html', 'app.js', 'conversation-store.js', 'editor-bundle.js', 'markdown-bundle.js', 'terminal-bundle.js', 'terminal.css', 'local-save.js', 'voice-activity.js', 'voice-capture-processor.js', 'styles.css'].includes(file)) return await serveFile(res, path.join(publicRoot, file));
     }
     throw httpError(404, '見つかりません。');
   } catch (error) {
@@ -288,4 +291,11 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+const terminalServer = attachTerminalServer(server, () => project.root, host);
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.once(signal, () => {
+    terminalServer.closeAll();
+    server.close(() => process.exit(0));
+  });
+}
 server.listen(port, host, () => console.log(`Vocode is running at http://${host}:${port}`));

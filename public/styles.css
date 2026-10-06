@@ -53,3 +53,20 @@
 .code-editor .cm-scroller{overflow:auto;overscroll-behavior:contain}
 .conversation{overscroll-behavior:contain}
 .message-elapsed{color:#a9e8c8;font-variant-numeric:tabular-nums}
+
+.terminal-glyph{font:700 12px/1 monospace;color:#8be7b9}
+.editor-topline .tabs{min-width:0;flex:1}.editor-topline .editor-top-actions{flex:none}
+.terminal-divider{height:7px;flex:none;display:grid;place-items:center;background:#16212a;border-top:1px solid #30414a;border-bottom:1px solid #30414a;cursor:row-resize;touch-action:none;user-select:none}
+.terminal-divider::after{content:'';width:38px;height:2px;border-radius:2px;background:#617b78}
+.terminal-divider:hover::after,.terminal-divider:focus-visible::after{background:#8be7b9}
+.terminal-divider:focus-visible{outline:2px solid #8be7b9;outline-offset:-2px}
+.terminal-divider[hidden],.terminal-panel[hidden]{display:none}
+.terminal-panel{height:240px;min-height:120px;max-height:calc(100% - 150px);flex:none;display:flex;flex-direction:column;background:#111b24;color:#d9e7e5}
+.terminal-header{height:33px;flex:none;display:flex;align-items:center;gap:10px;padding:0 9px 0 15px;border-bottom:1px solid #30414a;font-size:11px}
+.terminal-header strong{font-size:11px;color:#d9eee1}.terminal-header #terminalStatus{font-size:10px;color:#8dd3ab;white-space:nowrap}
+.terminal-path{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#7e929c;font-size:10px;text-align:right}
+.terminal-header button{width:23px;height:23px;flex:none;border:0;border-radius:4px;background:transparent;color:#9badb1;font-size:17px;line-height:1}
+.terminal-header button:hover{background:#2d4144;color:#e6f4ed}
+.terminal-surface{flex:1;min-height:0;overflow:hidden;padding:5px 8px 8px}
+.terminal-surface .xterm{height:100%}
+.resizing-terminal,.resizing-terminal *{cursor:row-resize!important;user-select:none!important}
