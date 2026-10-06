@@ -701,7 +701,14 @@ function addMessage(role, content, isError = false, agent = activeAgent()) {
   return message;
 }
 
-function showError(message, agent = activeAgent()) { addMessage('assistant', message, true, agent); }
+function showError(message, agent = activeAgent()) { return addMessage('assistant', message, true, agent); }
+
+function formatElapsedTime(milliseconds) {
+  const seconds = Math.max(0, Math.floor(milliseconds / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const time = `${String(minutes % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  return minutes >= 60 ? `${Math.floor(minutes / 60)}:${time}` : time;
+}
 
 function renderWebSources(message, sources) {
   if (!Array.isArray(sources) || !sources.length) return;
@@ -943,6 +950,7 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
   if (!agent.messages.length) {
     agent.name = `#${agent.id} ${text.replace(/\s+/g, ' ').slice(0, 16)}`;
   }
+  const sentAt = performance.now();
   addMessage('user', text, false, agent);
   const history = agent.messages.slice(-8);
   agent.messages.push({ role: 'user', content: text });
@@ -950,6 +958,13 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
   updateSendButton();
   renderAgentTabs();
   const pending = addMessage('assistant', '考えています…', false, agent);
+  const elapsedLabel = document.createElement('span');
+  elapsedLabel.className = 'message-elapsed';
+  elapsedLabel.setAttribute('aria-live', 'off');
+  pending.querySelector('.message-label').append(elapsedLabel);
+  const updateElapsed = () => { elapsedLabel.textContent = ` · 送信から ${formatElapsedTime(performance.now() - sentAt)}`; };
+  updateElapsed();
+  const elapsedTimer = setInterval(updateElapsed, 1000);
   const activeFile = state.active;
   const activeContent = state.open.get(activeFile)?.content;
   const workspacePath = state.projectPath;
@@ -957,19 +972,23 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
   const existingAtRequest = new Set(state.files);
   try {
     const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile, activeContent, history, webSearch: state.webSearch }));
+    const duration = formatElapsedTime(performance.now() - sentAt);
     pending.remove();
     const answer = addMessage('assistant', result.reply || '回答がありませんでした。', false, agent);
-    answer.querySelector('.message-label').textContent = `Vocode · ${result.files?.length ? '変更案' : '回答'}${result.webSearchUsed ? ' · Web検索' : ''}`;
+    answer.querySelector('.message-label').textContent = `Vocode · ${result.files?.length ? '変更案' : '回答'}${result.webSearchUsed ? ' · Web検索' : ''} · 所要 ${duration}`;
     renderWebSources(answer, result.sources);
     agent.messages.push({ role: 'assistant', content: result.reply || '' });
     if (result.files?.length) renderProposal(result.files, agent, workspacePath, { ...baseVersions, ...result.baseVersions }, existingAtRequest);
     if (agent === activeAgent()) speak(result.reply || '');
     else agent.unread = true;
   } catch (error) {
+    const duration = formatElapsedTime(performance.now() - sentAt);
     pending.remove();
-    showError(error.message, agent);
+    const message = showError(error.message, agent);
+    message.querySelector('.message-label').textContent = `Vocode · エラー · 所要 ${duration}`;
     if (agent !== activeAgent()) agent.unread = true;
   } finally {
+    clearInterval(elapsedTimer);
     agent.busy = false;
     updateSendButton();
     renderAgentTabs();

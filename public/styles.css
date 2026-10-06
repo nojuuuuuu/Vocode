@@ -52,3 +52,4 @@
 .code-editor .cm-editor{height:100%}
 .code-editor .cm-scroller{overflow:auto;overscroll-behavior:contain}
 .conversation{overscroll-behavior:contain}
+.message-elapsed{color:#a9e8c8;font-variant-numeric:tabular-nums}
