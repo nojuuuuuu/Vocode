@@ -5,8 +5,8 @@ import { renderMarkdown } from './markdown-bundle.js';
 import { VoiceSegmenter, updateVoiceDraft, wavBlob } from './voice-activity.js';
 
 const $ = selector => document.querySelector(selector);
-const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, speaking: true, webSearch: localStorage.getItem('vocode-web-search') !== 'off' };
-const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, suppressed: false, mutedUntil: 0, playbackId: 0, draftNotice: false, recordingAgentId: null };
+const state = { files: [], tree: [], trash: [], open: new Map(), saving: new Map(), saveTimers: new Map(), active: '', selected: '', expanded: new Set(), projectName: 'workspace', projectPath: '', openRequest: 0, preview: false, webSearch: localStorage.getItem('vocode-web-search') !== 'off' };
+const voice = { enabled: false, starting: false, generation: 0, stream: null, context: null, node: null, segmenter: null, queue: [], processing: false, abort: null, draftNotice: false, recordingAgentId: null };
 const editor = createCodeEditor($('#codeEditor'), content => {
   if (!state.active) return;
   state.open.get(state.active).content = content;
@@ -111,11 +111,6 @@ function selectAgent(id) {
   if (previous) {
     previous.draft = messageInput.value;
     previous.scrollTop = $('#conversation').scrollTop;
-    if (previous !== next && voice.suppressed && 'speechSynthesis' in window) {
-      ++voice.playbackId;
-      speechSynthesis.cancel();
-      releaseVoiceAfterSpeech(voice.playbackId);
-    }
   }
   activeAgentId = id;
   for (const agent of agents) agent.view.hidden = agent !== next;
@@ -1045,28 +1040,6 @@ function updateWebSearchButton() {
   button.title = state.webSearch ? '必要なときにWeb検索を使う' : 'Web検索はオフ';
 }
 
-function releaseVoiceAfterSpeech(playbackId) {
-  if (playbackId !== voice.playbackId) return;
-  voice.suppressed = false;
-  voice.mutedUntil = Date.now() + 700;
-  updateVoiceDisplay();
-}
-
-function speak(text) {
-  if (!state.speaking || !('speechSynthesis' in window)) return;
-  const playbackId = ++voice.playbackId;
-  speechSynthesis.cancel();
-  voice.suppressed = true;
-  voice.segmenter?.reset();
-  updateVoiceDisplay();
-  const utterance = new SpeechSynthesisUtterance(text.slice(0, 700));
-  utterance.lang = 'ja-JP';
-  utterance.rate = 1.05;
-  utterance.onend = () => releaseVoiceAfterSpeech(playbackId);
-  utterance.onerror = () => releaseVoiceAfterSpeech(playbackId);
-  speechSynthesis.speak(utterance);
-}
-
 function renderProposal(files, agent, workspacePath, baseVersions, existingAtRequest, options = {}) {
   const entry = options.entry || {
     kind: 'proposal', files, workspacePath, baseVersions,
@@ -1193,8 +1166,7 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
     });
     agent.messages.push({ role: 'assistant', content: result.reply || '' });
     if (result.files?.length) renderProposal(result.files, agent, workspacePath, { ...baseVersions, ...result.baseVersions }, existingAtRequest);
-    if (agent === activeAgent()) speak(result.reply || '');
-    else agent.unread = true;
+    if (agent !== activeAgent()) agent.unread = true;
   } catch (error) {
     const duration = formatElapsedTime(performance.now() - sentAt);
     pending.remove();
@@ -1231,7 +1203,7 @@ async function togglePreview() {
 
 function updateVoiceDisplay() {
   const active = voice.enabled || voice.starting;
-  const talking = voice.segmenter?.active && !voice.suppressed;
+  const talking = voice.segmenter?.active;
   $('#micButton').classList.toggle('listening', active);
   $('#micButton').classList.toggle('recording', Boolean(talking));
   $('#micButton').disabled = false;
@@ -1242,11 +1214,10 @@ function updateVoiceDisplay() {
   $('#recordingBanner').hidden = !active;
   $('#recordingBanner').classList.toggle('speaking', Boolean(talking));
   $('#voiceStatus').textContent = voice.starting ? 'マイクを準備しています…'
-    : voice.suppressed || Date.now() < voice.mutedUntil ? '回答の読み上げ中は一時停止しています'
-      : talking ? '聞き取っています。話し終えると下書きに追加します'
-        : voice.processing || voice.queue.length ? '音声を処理中。次の発話も聞いています'
-          : voice.draftNotice ? '下書きに追加しました。「送信」と言うと送ります'
-            : '声を待っています。「送信」と言うと送ります';
+    : talking ? '聞き取っています。話し終えると下書きに追加します'
+      : voice.processing || voice.queue.length ? '音声を処理中。次の発話も聞いています'
+        : voice.draftNotice ? '下書きに追加しました。「送信」と言うと送ります'
+          : '声を待っています。「送信」と言うと送ります';
   $('#recordingTime').textContent = talking ? `${Math.floor(voice.segmenter.recordedSamples / voice.segmenter.sampleRate)}秒` : '';
 }
 
@@ -1331,11 +1302,6 @@ async function processVoiceQueue() {
 
 function receiveVoiceSamples(samples) {
   if (!voice.enabled || !voice.segmenter) return;
-  if (voice.suppressed || Date.now() < voice.mutedUntil) {
-    voice.segmenter.reset();
-    voice.recordingAgentId = null;
-    return;
-  }
   const result = voice.segmenter.push(samples);
   if (result.started) { voice.recordingAgentId = activeAgentId; voice.draftNotice = false; updateVoiceDisplay(); }
   if (voice.segmenter.active) $('#recordingTime').textContent = `${Math.floor(voice.segmenter.recordedSamples / voice.segmenter.sampleRate)}秒`;
@@ -1438,12 +1404,6 @@ messageInput.addEventListener('input', () => {
 window.addEventListener('pagehide', persistConversations);
 messageInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(messageInput.value); } });
 $('#micButton').addEventListener('click', toggleVoiceListening);
-$('#speakButton').addEventListener('click', () => {
-  state.speaking = !state.speaking;
-  $('#speakButton').classList.toggle('active', state.speaking);
-  $('#speakButton').title = state.speaking ? '回答を読み上げる' : '読み上げはオフ';
-  if (!state.speaking && 'speechSynthesis' in window) { ++voice.playbackId; speechSynthesis.cancel(); releaseVoiceAfterSpeech(voice.playbackId); }
-});
 $('#newFileButton').addEventListener('click', () => openEntryDialog('file'));
 $('#newFolderButton').addEventListener('click', () => openEntryDialog('folder'));
 $('#chooseWorkspaceButton').addEventListener('click', openWorkspaceDialog);
