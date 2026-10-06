@@ -1,5 +1,6 @@
 import { writeProjectToDirectory } from './local-save.js';
 import { createCodeEditor } from './editor-bundle.js';
+import { loadConversation, saveConversation } from './conversation-store.js';
 import { renderMarkdown } from './markdown-bundle.js';
 import { VoiceSegmenter, updateVoiceDraft, wavBlob } from './voice-activity.js';
 
@@ -19,8 +20,42 @@ let settingsStatus = { configured: false, model: '', keySource: 'none' };
 const agents = [];
 let activeAgentId = null;
 let nextAgentNumber = 1;
+let restoringConversations = false;
+let conversationSaveQueue = Promise.resolve();
+let draftSaveTimer = null;
+let conversationStorageFailed = false;
 
 function activeAgent() { return agents.find(agent => agent.id === activeAgentId); }
+
+function persistConversations() {
+  clearTimeout(draftSaveTimer);
+  if (!state.projectPath || restoringConversations || conversationStorageFailed) return conversationSaveQueue;
+  const snapshot = {
+    version: 1,
+    workspacePath: state.projectPath,
+    activeAgentId,
+    nextAgentNumber,
+    agents: agents.map(agent => ({
+      id: agent.id,
+      name: agent.name,
+      draft: agent === activeAgent() ? messageInput.value : agent.draft,
+      messages: agent.messages,
+      entries: agent.entries,
+      busy: agent.busy,
+      scrollTop: agent === activeAgent() ? $('#conversation').scrollTop : agent.scrollTop
+    }))
+  };
+  conversationSaveQueue = conversationSaveQueue.then(() => saveConversation(snapshot)).catch(error => {
+    conversationStorageFailed = true;
+    showToast(`会話履歴を保存できませんでした: ${error.message}`, true);
+  });
+  return conversationSaveQueue;
+}
+
+function saveDraftSoon() {
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(persistConversations, 250);
+}
 
 function renderAgentTabs() {
   const tabs = $('#agentTabs');
@@ -91,11 +126,13 @@ function selectAgent(id) {
   renderAgentTabs();
   updateSendButton();
   updateVoiceDisplay();
+  persistConversations();
 }
 
-function createAgent() {
+function createAgent(saved = null) {
   if (agents.length >= 8) return;
-  const number = nextAgentNumber++;
+  const number = saved ? saved.id : nextAgentNumber++;
+  if (saved) nextAgentNumber = Math.max(nextAgentNumber, number + 1);
   const view = document.createElement('div');
   view.className = 'agent-thread';
   view.id = `agent-thread-${number}`;
@@ -104,16 +141,23 @@ function createAgent() {
   view.append(welcomeTemplate.cloneNode(true));
   view.hidden = true;
   $('#conversation').append(view);
-  const agent = { id: number, name: `エージェント ${number}`, view, messages: [], draft: '', scrollTop: 0, busy: false, unread: false };
+  const agent = {
+    id: number, name: saved?.name || `エージェント ${number}`, view,
+    messages: saved?.messages || [], entries: saved?.entries || [], draft: saved?.draft || '',
+    scrollTop: saved?.scrollTop || 0, busy: Boolean(saved?.busy), unread: false
+  };
   agents.push(agent);
-  selectAgent(agent.id);
-  messageInput.focus();
+  if (!saved) {
+    selectAgent(agent.id);
+    messageInput.focus();
+  }
+  return agent;
 }
 
 function closeAgent(id) {
   const agent = agents.find(item => item.id === id);
   if (!agent || agent.busy || agents.length === 1) return;
-  if ((agent.messages.length || agent.draft.trim()) && !confirm(`${agent.name} の会話を閉じますか？`)) return;
+  if ((agent.entries.length || agent.draft.trim()) && !confirm(`${agent.name} の会話を閉じますか？`)) return;
   if (activeAgentId === id && (voice.enabled || voice.starting)) stopVoiceListening();
   const index = agents.indexOf(agent);
   agents.splice(index, 1);
@@ -122,6 +166,7 @@ function closeAgent(id) {
     activeAgentId = null;
     selectAgent(agents[Math.max(0, index - 1)].id);
   } else renderAgentTabs();
+  persistConversations();
 }
 
 function resetAgents() {
@@ -129,7 +174,56 @@ function resetAgents() {
   activeAgentId = null;
   messageInput.value = '';
   $('#conversation').replaceChildren();
-  createAgent();
+  nextAgentNumber = 1;
+}
+
+async function restoreConversations() {
+  restoringConversations = true;
+  resetAgents();
+  let loaded = false;
+  try {
+    const saved = await loadConversation(state.projectPath);
+    const seen = new Set();
+    if (saved?.version === 1 && Array.isArray(saved.agents)) {
+      for (const item of saved.agents.slice(0, 8)) {
+        if (!item || !Number.isSafeInteger(item.id) || item.id < 1 || seen.has(item.id) || !Array.isArray(item.entries) || !Array.isArray(item.messages)) continue;
+        seen.add(item.id);
+        const agent = createAgent({
+          ...item,
+          name: String(item.name || `エージェント ${item.id}`),
+          draft: String(item.draft || ''),
+          entries: item.entries.filter(entry => entry && (
+            entry.kind === 'message' && ['user', 'assistant'].includes(entry.role) && typeof entry.content === 'string'
+            || entry.kind === 'proposal' && Array.isArray(entry.files) && entry.files.every(file => file && typeof file.path === 'string' && typeof file.content === 'string')
+          ))
+        });
+        for (const entry of agent.entries) {
+          if (entry.kind === 'message') {
+            addMessage(entry.role, entry.content, entry.error, agent, { persist: false, label: entry.label, sources: entry.sources });
+          } else if (entry.kind === 'proposal' && Array.isArray(entry.files)) {
+            renderProposal(entry.files, agent, entry.workspacePath, entry.baseVersions || {}, new Set(entry.existingAtRequest || []), { persist: false, entry });
+          }
+        }
+        if (agent.busy) {
+          agent.busy = false;
+          addMessage('assistant', 'ページの再読み込みで前回の処理が中断されました。必要ならもう一度送信してください。', true, agent,
+            { label: 'Vocode · 中断' });
+        }
+      }
+      nextAgentNumber = Math.max(nextAgentNumber, Number(saved.nextAgentNumber) || 1);
+    }
+    if (!agents.length) createAgent();
+    else selectAgent(agents.some(agent => agent.id === saved.activeAgentId) ? saved.activeAgentId : agents[0].id);
+    loaded = true;
+  } catch (error) {
+    resetAgents();
+    createAgent();
+    conversationStorageFailed = true;
+    showToast(`会話履歴を読み込めませんでした: ${error.message}`, true);
+  } finally {
+    restoringConversations = false;
+  }
+  if (loaded) await persistConversations();
 }
 
 const panelLayout = $('#workspaceLayout');
@@ -649,6 +743,7 @@ async function switchWorkspace(options) {
   controls.forEach(control => { control.disabled = true; });
   $('#workspacePathError').hidden = true;
   try {
+    await persistConversations();
     await flushFiles();
     const result = await api(options.url, options.request);
     if (result.cancelled) return;
@@ -658,8 +753,8 @@ async function switchWorkspace(options) {
     state.saving.clear();
     state.selected = '';
     if (voice.enabled || voice.starting) stopVoiceListening();
-    resetAgents();
     setWorkspaceInfo(result.projectName, result.projectPath);
+    await restoreConversations();
     const data = await api('/api/tree');
     state.tree = data.tree;
     state.trash = data.trash;
@@ -683,25 +778,30 @@ async function switchWorkspace(options) {
   } finally { controls.forEach(control => { control.disabled = false; }); }
 }
 
-function addMessage(role, content, isError = false, agent = activeAgent()) {
+function addMessage(role, content, isError = false, agent = activeAgent(), options = {}) {
   const welcome = agent.view.querySelector('.welcome');
   if (welcome) welcome.remove();
   const message = document.createElement('div');
   message.className = `message ${role}${isError ? ' error' : ''}`;
   const label = document.createElement('span');
   label.className = 'message-label';
-  label.textContent = role === 'user' ? 'あなた' : 'Vocode';
+  label.textContent = options.label || (role === 'user' ? 'あなた' : 'Vocode');
   const body = document.createElement('div');
   body.className = 'message-body';
   if (role === 'assistant' && !isError) body.innerHTML = renderMarkdown(content);
   else body.textContent = content;
   message.append(label, body);
   agent.view.append(message);
+  if (options.sources) renderWebSources(message, options.sources);
+  if (options.persist !== false) {
+    agent.entries.push({ kind: 'message', role, content, error: isError, label: label.textContent, sources: options.sources || [] });
+    persistConversations();
+  }
   if (agent === activeAgent()) $('#conversation').scrollTop = $('#conversation').scrollHeight;
   return message;
 }
 
-function showError(message, agent = activeAgent()) { return addMessage('assistant', message, true, agent); }
+function showError(message, agent = activeAgent(), options = {}) { return addMessage('assistant', message, true, agent, options); }
 
 function formatElapsedTime(milliseconds) {
   const seconds = Math.max(0, Math.floor(milliseconds / 1000));
@@ -866,7 +966,11 @@ function speak(text) {
   speechSynthesis.speak(utterance);
 }
 
-function renderProposal(files, agent, workspacePath, baseVersions, existingAtRequest) {
+function renderProposal(files, agent, workspacePath, baseVersions, existingAtRequest, options = {}) {
+  const entry = options.entry || {
+    kind: 'proposal', files, workspacePath, baseVersions,
+    existingAtRequest: [...existingAtRequest], status: 'pending'
+  };
   const versionAtRequest = path => Object.hasOwn(baseVersions, path) ? baseVersions[path] : undefined;
   const proposal = document.createElement('div');
   proposal.className = 'proposal';
@@ -896,7 +1000,8 @@ function renderProposal(files, agent, workspacePath, baseVersions, existingAtReq
   }
   const apply = document.createElement('button');
   apply.className = 'apply-button';
-  apply.textContent = '変更を適用する';
+  apply.disabled = entry.status === 'applied';
+  apply.textContent = apply.disabled ? '適用しました ✓' : '変更を適用する';
   apply.addEventListener('click', async () => {
     if (state.projectPath !== workspacePath) {
       showError('作業フォルダが切り替わっています。この変更案は元のフォルダで確認してください。', agent);
@@ -921,6 +1026,8 @@ function renderProposal(files, agent, workspacePath, baseVersions, existingAtReq
       await refreshTree();
       if (agent === activeAgent()) await openFile(files[0].path);
       apply.textContent = '適用しました ✓';
+      entry.status = 'applied';
+      persistConversations();
       addMessage('assistant', '変更を適用しました。コードとプレビューを確認してください。', false, agent);
       if (agent !== activeAgent()) { agent.unread = true; renderAgentTabs(); }
       if (state.preview) refreshPreview();
@@ -933,6 +1040,10 @@ function renderProposal(files, agent, workspacePath, baseVersions, existingAtReq
   });
   proposal.append(apply);
   agent.view.append(proposal);
+  if (options.persist !== false) {
+    agent.entries.push(entry);
+    persistConversations();
+  }
   if (agent === activeAgent()) $('#conversation').scrollTop = $('#conversation').scrollHeight;
 }
 
@@ -957,7 +1068,7 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
   agent.busy = true;
   updateSendButton();
   renderAgentTabs();
-  const pending = addMessage('assistant', '考えています…', false, agent);
+  const pending = addMessage('assistant', '考えています…', false, agent, { persist: false });
   const elapsedLabel = document.createElement('span');
   elapsedLabel.className = 'message-elapsed';
   elapsedLabel.setAttribute('aria-live', 'off');
@@ -971,12 +1082,14 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
   const baseVersions = Object.fromEntries([...state.open].map(([path, file]) => [path, file.version]));
   const existingAtRequest = new Set(state.files);
   try {
+    await persistConversations();
     const result = await api('/api/assistant', jsonOptions('POST', { message: text, activeFile, activeContent, history, webSearch: state.webSearch }));
     const duration = formatElapsedTime(performance.now() - sentAt);
     pending.remove();
-    const answer = addMessage('assistant', result.reply || '回答がありませんでした。', false, agent);
-    answer.querySelector('.message-label').textContent = `Vocode · ${result.files?.length ? '変更案' : '回答'}${result.webSearchUsed ? ' · Web検索' : ''} · 所要 ${duration}`;
-    renderWebSources(answer, result.sources);
+    addMessage('assistant', result.reply || '回答がありませんでした。', false, agent, {
+      label: `Vocode · ${result.files?.length ? '変更案' : '回答'}${result.webSearchUsed ? ' · Web検索' : ''} · 所要 ${duration}`,
+      sources: result.sources
+    });
     agent.messages.push({ role: 'assistant', content: result.reply || '' });
     if (result.files?.length) renderProposal(result.files, agent, workspacePath, { ...baseVersions, ...result.baseVersions }, existingAtRequest);
     if (agent === activeAgent()) speak(result.reply || '');
@@ -984,14 +1097,14 @@ async function sendMessage(value, preserveInput = false, agent = activeAgent()) 
   } catch (error) {
     const duration = formatElapsedTime(performance.now() - sentAt);
     pending.remove();
-    const message = showError(error.message, agent);
-    message.querySelector('.message-label').textContent = `Vocode · エラー · 所要 ${duration}`;
+    showError(error.message, agent, { label: `Vocode · エラー · 所要 ${duration}` });
     if (agent !== activeAgent()) agent.unread = true;
   } finally {
     clearInterval(elapsedTimer);
     agent.busy = false;
     updateSendButton();
     renderAgentTabs();
+    await persistConversations();
     if (!preserveInput && agent === activeAgent()) messageInput.focus();
   }
 }
@@ -1071,7 +1184,7 @@ async function processVoiceQueue() {
       const { blob, agentId } = voice.queue.shift();
       const agent = agents.find(item => item.id === agentId);
       if (!agent) continue;
-      const pending = addMessage('assistant', '音声を文字にしています…', false, agent);
+      const pending = addMessage('assistant', '音声を文字にしています…', false, agent, { persist: false });
       const abort = new AbortController();
       voice.abort = abort;
       updateVoiceDisplay();
@@ -1092,6 +1205,7 @@ async function processVoiceQueue() {
             renderAgentTabs();
           }
           voice.draftNotice = true;
+          saveDraftSoon();
         }
         if (send) {
           if (!agent.draft.trim()) showToast('送る内容がありません。先に話してください。');
@@ -1207,14 +1321,20 @@ if (!window.showDirectoryPicker) {
 }
 $('#refreshPreviewButton').addEventListener('click', refreshPreview);
 $('#sendButton').addEventListener('click', () => sendMessage(messageInput.value));
-$('#newAgentButton').addEventListener('click', createAgent);
+$('#newAgentButton').addEventListener('click', () => createAgent());
 $('#webSearchButton').addEventListener('click', () => {
   state.webSearch = !state.webSearch;
   localStorage.setItem('vocode-web-search', state.webSearch ? 'auto' : 'off');
   updateWebSearchButton();
 });
 updateWebSearchButton();
-messageInput.addEventListener('input', () => { activeAgent().draft = messageInput.value; });
+messageInput.addEventListener('input', () => {
+  const agent = activeAgent();
+  if (!agent) return;
+  agent.draft = messageInput.value;
+  saveDraftSoon();
+});
+window.addEventListener('pagehide', persistConversations);
 messageInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); sendMessage(messageInput.value); } });
 $('#micButton').addEventListener('click', toggleVoiceListening);
 $('#speakButton').addEventListener('click', () => {
@@ -1296,6 +1416,7 @@ $('#conversation').addEventListener('click', event => {
   if (!button) return;
   messageInput.value = button.dataset.suggestion;
   activeAgent().draft = messageInput.value;
+  saveDraftSoon();
   messageInput.focus();
 });
 
@@ -1305,6 +1426,7 @@ try {
   const [status, data] = await Promise.all([api('/api/status'), api('/api/tree')]);
   updateApiStatus(status);
   setWorkspaceInfo(status.projectName, status.projectPath);
+  await restoreConversations();
   state.tree = data.tree;
   state.trash = data.trash;
   state.files = allFiles();
@@ -1314,4 +1436,7 @@ try {
   renderTrash();
   if (state.files.length) await openFile(state.files.includes('index.html') ? 'index.html' : state.files[0]);
   else clearEditor();
-} catch (error) { showError(error.message); }
+} catch (error) {
+  if (!agents.length) createAgent();
+  showError(error.message);
+}

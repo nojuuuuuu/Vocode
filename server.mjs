@@ -278,7 +278,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET') {
       const file = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
-      if (['index.html', 'app.js', 'editor-bundle.js', 'markdown-bundle.js', 'local-save.js', 'voice-activity.js', 'voice-capture-processor.js', 'styles.css'].includes(file)) return await serveFile(res, path.join(publicRoot, file));
+      if (['index.html', 'app.js', 'conversation-store.js', 'editor-bundle.js', 'markdown-bundle.js', 'local-save.js', 'voice-activity.js', 'voice-capture-processor.js', 'styles.css'].includes(file)) return await serveFile(res, path.join(publicRoot, file));
     }
     throw httpError(404, '見つかりません。');
   } catch (error) {
